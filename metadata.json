@@ -1,0 +1,6 @@
+{
+  "name": "مدیریت سرمایه",
+  "description": "سامانه هوشمند و جامع مدیریت ثروت، پرتفوی، دارایی‌ها و بازنشستگی به زبان فارسی",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

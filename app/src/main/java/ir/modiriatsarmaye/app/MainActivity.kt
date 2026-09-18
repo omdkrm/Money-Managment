@@ -262,6 +262,12 @@ fun WealthAppContent(
                         },
                         onSyncMarketPrices = {
                             viewModel.syncMarketPrices(forceRefresh = true)
+                        },
+                        onUpdateAllStocks = {
+                            viewModel.syncAllStockPrices(forceRefresh = true)
+                        },
+                        onUpdateIndividualStock = { symbol ->
+                            viewModel.syncStockPrice(symbol, forceRefresh = true)
                         }
                     )
                 }

@@ -86,7 +86,7 @@ object CalculationEngine {
         transactions: List<TransactionEntity>,
         prices: List<CurrentPriceEntity>,
         settings: AppSettingsEntity,
-        liabilities: List<LiabilityEntity>
+        liabilities: List<LiabilityEntity> = emptyList()
     ): PortfolioSummary {
         val priceMap = prices.associateBy { it.assetSymbolOrName }
 

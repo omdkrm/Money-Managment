@@ -335,6 +335,50 @@ class WealthViewModel(
     }
 
     /**
+     * همگام‌سازی و بروزرسانی کلیه سهام موجود (Update all stock prices)
+     */
+    fun syncAllStockPrices(forceRefresh: Boolean = true) {
+        viewModelScope.launch {
+            _isMarketUpdating.value = true
+            try {
+                val report = repository.syncAllStockPrices(forceRefresh)
+                _lastMarketUpdateReport.value = report
+                if (report.updatedCount > 0) {
+                    _userSuccessMessage.value = report.messageFa
+                } else {
+                    _userErrorMessage.value = report.messageFa
+                }
+            } catch (e: Exception) {
+                _userErrorMessage.value = "خطا در بروزرسانی سهام: ${e.localizedMessage ?: "اتصال اینترنت در دسترس نیست"}"
+            } finally {
+                _isMarketUpdating.value = false
+            }
+        }
+    }
+
+    /**
+     * همگام‌سازی و استعلام قیمت یک سهم خاص (Update an individual stock price)
+     */
+    fun syncStockPrice(symbol: String, forceRefresh: Boolean = true) {
+        viewModelScope.launch {
+            _isMarketUpdating.value = true
+            try {
+                val report = repository.syncStockPrice(symbol, forceRefresh)
+                _lastMarketUpdateReport.value = report
+                if (report.updatedCount > 0) {
+                    _userSuccessMessage.value = report.messageFa
+                } else {
+                    _userErrorMessage.value = report.messageFa
+                }
+            } catch (e: Exception) {
+                _userErrorMessage.value = "خطا در استعلام نماد $symbol: ${e.localizedMessage ?: "اتصال اینترنت در دسترس نیست"}"
+            } finally {
+                _isMarketUpdating.value = false
+            }
+        }
+    }
+
+    /**
      * اتصال حساب Google
      */
     fun connectGoogleAccount(email: String, displayName: String, onComplete: ((Boolean, String?) -> Unit)? = null) {

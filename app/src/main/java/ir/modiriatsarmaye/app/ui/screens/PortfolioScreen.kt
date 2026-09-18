@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ir.modiriatsarmaye.app.data.market.StockInstrumentMapper
 import ir.modiriatsarmaye.app.data.model.*
 import ir.modiriatsarmaye.app.ui.components.*
 import ir.modiriatsarmaye.app.ui.theme.*
@@ -31,7 +32,9 @@ fun PortfolioScreen(
     onUpdatePriceClick: (HoldingItem) -> Unit,
     onAddTransactionForAsset: (AssetClass, String) -> Unit,
     onAddDividendClick: () -> Unit,
-    onSyncMarketPrices: () -> Unit
+    onSyncMarketPrices: () -> Unit,
+    onUpdateAllStocks: (() -> Unit)? = null,
+    onUpdateIndividualStock: ((String) -> Unit)? = null
 ) {
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     val categories = listOf("همه دارایی‌ها", "طلا و سکه", "صندوق طلا", "صندوق سهامی", "درآمد ثابت", "سهام", "ارز و دلار", "سود نقدی مجامع")
@@ -157,6 +160,18 @@ fun PortfolioScreen(
                 GoldDiagnosticCard(
                     diagnostics = lastReport.goldDiagnostics,
                     pipelineDiagnostic = lastReport.pipelineDiagnostic
+                )
+            }
+        }
+
+        // بخش عیب‌یابی فنی سهام (Stock Diagnostics)
+        if (lastReport != null && (lastReport.stockDiagnostics.isNotEmpty() || lastReport.stockPipelineDiagnostic != null || selectedCategoryIndex == 5)) {
+            item {
+                StockDiagnosticCard(
+                    diagnostics = lastReport.stockDiagnostics,
+                    pipelineDiagnostic = lastReport.stockPipelineDiagnostic,
+                    onUpdateAllStocks = onUpdateAllStocks,
+                    onUpdateIndividualStock = onUpdateIndividualStock
                 )
             }
         }
@@ -350,7 +365,23 @@ fun HoldingCardItem(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        if (holding.assetSymbol.isNotBlank() && holding.assetSymbol != holding.assetName) {
+                        if (holding.assetClass == AssetClass.STOCK) {
+                            val validSymbol = StockInstrumentMapper.resolveStockSymbol(holding.assetSymbol)
+                            if (validSymbol != null) {
+                                Text(
+                                    text = "نماد: $validSymbol",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    text = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        } else if (holding.assetSymbol.isNotBlank() && holding.assetSymbol != holding.assetName) {
                             Text(
                                 text = holding.assetSymbol,
                                 style = MaterialTheme.typography.bodySmall,

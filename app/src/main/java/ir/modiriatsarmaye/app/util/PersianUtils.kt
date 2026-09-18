@@ -35,6 +35,18 @@ object PersianUtils {
         return result
     }
 
+    /**
+     * تبدیل رشته حاوی ارقام فارسی/انگلیسی و کاما به عدد اعشاری معتبر
+     */
+    fun parsePersianDouble(text: String): Double? {
+        val eng = toEnglishDigits(text)
+            .replace(",", "")
+            .replace("٬", "")
+            .replace(" ", "")
+            .trim()
+        return eng.toDoubleOrNull()
+    }
+
     fun formatNumber(number: Double, decimals: Int = 0): String {
         val pattern = when {
             decimals > 0 -> "#,##0." + "0".repeat(decimals)

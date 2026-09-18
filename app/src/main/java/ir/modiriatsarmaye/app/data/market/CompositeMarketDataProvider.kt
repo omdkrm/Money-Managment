@@ -15,6 +15,7 @@ data class MarketUpdateReport(
     val stockDiagnostics: List<StrategyDiagnostic> = emptyList(),
     val fundDiagnostics: List<StrategyDiagnostic> = emptyList(),
     val pipelineDiagnostic: SyncPipelineDiagnostic? = null,
+    val stockPipelineDiagnostic: SyncPipelineDiagnostic? = null,
     val allDiagnostics: List<StrategyDiagnostic> = emptyList()
 )
 
@@ -24,11 +25,17 @@ data class MarketUpdateReport(
  * با حفظ داده‌های قبلی، جلوگیری از جعل قیمت و پایداری کامل در حالت آفلاین
  */
 class CompositeMarketDataProvider(
-    private val goldProvider: GoldPriceProvider = GoldPriceProvider(),
-    private val stockProvider: StockMarketPriceProvider = StockMarketPriceProvider(),
-    private val fundProvider: FundMarketPriceProvider = FundMarketPriceProvider(),
-    private val providers: List<MarketDataProvider> = listOf(goldProvider, stockProvider, fundProvider)
+    val goldProvider: GoldPriceProvider = GoldPriceProvider(),
+    val stockProvider: StockMarketPriceProvider = StockMarketPriceProvider(),
+    val fundProvider: FundMarketPriceProvider = FundMarketPriceProvider(),
+    val providers: List<MarketDataProvider> = listOf(goldProvider, stockProvider, fundProvider)
 ) {
+    constructor(providers: List<MarketDataProvider>) : this(
+        goldProvider = providers.filterIsInstance<GoldPriceProvider>().firstOrNull() ?: GoldPriceProvider(),
+        stockProvider = providers.filterIsInstance<StockMarketPriceProvider>().firstOrNull() ?: StockMarketPriceProvider(),
+        fundProvider = providers.filterIsInstance<FundMarketPriceProvider>().firstOrNull() ?: FundMarketPriceProvider(),
+        providers = providers
+    )
     private var lastFetchTimestamp: Long = 0L
     private val cacheDurationMs: Long = 5 * 60 * 1000L // 5 minutes cache window
     private var cachedMarketPrices: List<MarketPrice> = emptyList()
@@ -240,12 +247,15 @@ class CompositeMarketDataProvider(
                 successCount++
             } else {
                 // اگر بروزرسانی آنلاین ناموفق بود: حفظ آخرین قیمت معتبر محلی با برچسب STALE
+                val isMissingStockSymbol = assetClass == AssetClass.STOCK &&
+                    StockInstrumentMapper.resolveStockSymbol(assetKey, existing?.assetName ?: "") == null
+
                 if (existing != null && existing.price > 0.0) {
                     val newStatus = if (existing.source == "ورود دستی") PriceStatus.MANUAL else PriceStatus.STALE
-                    val errorMsg = if (!isNetworkSuccess) {
-                        networkErrorMessage ?: "اتصال به بازار برقرار نشد (حفظ آخرین نرخ معتبر)."
-                    } else {
-                        "نرخ نماد $assetKey در بازار یافت نشد؛ نیاز به تصحیح نماد یا ثبت دستی."
+                    val errorMsg = when {
+                        isMissingStockSymbol -> StockInstrumentMapper.SYMBOL_REQUIRED_LABEL
+                        !isNetworkSuccess -> networkErrorMessage ?: "اتصال به بازار برقرار نشد (حفظ آخرین نرخ معتبر)."
+                        else -> "نرخ نماد $assetKey در بازار یافت نشد؛ نیاز به تصحیح نماد یا ثبت دستی."
                     }
                     updatedList.add(
                         existing.copy(
@@ -256,10 +266,10 @@ class CompositeMarketDataProvider(
                     )
                 } else {
                     // بدون ایجاد قیمت جعلی یا صفر
-                    val errorMsg = if (!isNetworkSuccess) {
-                        networkErrorMessage ?: "منبع دریافت قیمت‌های بازار در دسترس نیست."
-                    } else {
-                        "قیمت روز در دسترس نیست"
+                    val errorMsg = when {
+                        isMissingStockSymbol -> StockInstrumentMapper.SYMBOL_REQUIRED_LABEL
+                        !isNetworkSuccess -> networkErrorMessage ?: "منبع دریافت قیمت‌های بازار در دسترس نیست."
+                        else -> "قیمت روز در دسترس نیست"
                     }
                     updatedList.add(
                         CurrentPriceEntity(

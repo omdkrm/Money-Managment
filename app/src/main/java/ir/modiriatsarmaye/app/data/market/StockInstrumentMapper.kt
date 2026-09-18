@@ -9,8 +9,10 @@ import ir.modiriatsarmaye.app.util.PersianUtils
  */
 object StockInstrumentMapper {
 
+    const val SYMBOL_REQUIRED_LABEL = "نیاز به تعیین نماد"
+
     /**
-     * نرمال‌سازی متون فارسی، اصلاح حروف ی و ک عربی، حذف نیم‌فاصله و پیشوندهای مرسوم
+     * نرمال‌سازی متون فارسی، اصلاح حروف ی و ک عربی، حذف نیم‌فاصله، کاراکترهای پنهان و پیشوندهای مرسوم
      */
     fun normalizeSymbol(raw: String): String {
         if (raw.isBlank()) return ""
@@ -18,7 +20,15 @@ object StockInstrumentMapper {
             .replace("ي", "ی")
             .replace("ك", "ک")
             .replace("\u200C", "") // zero-width non-joiner
+            .replace("\u200B", "") // zero-width space
+            .replace("\u200E", "") // LTR mark
+            .replace("\u200F", "") // RTL mark
+            .replace("\uFEFF", "") // BOM
             .replace("\u00A0", "") // non-breaking space
+            .replace("&nbsp;", "")
+            .replace("&zwnj;", "")
+            .replace("&#160;", "")
+            .replace("&#8204;", "")
             .replace("-", "")
             .replace("_", "")
             .trim()
@@ -31,23 +41,16 @@ object StockInstrumentMapper {
     }
 
     /**
-     * استخراج و تطابق قطعی نماد بورسی.
-     * اولویت با نماد صریح وارد شده (symbolOrKey) است.
-     * اگر نماد صریح وارد نشده باشد و نام شرکت یک کلمه بدون فاصله کوتاه باشد، از آن استفاده می‌شود.
+     * استخراج نماد بورسی با استفاده دقیق از نماد ذخیره شده برای هر دارایی.
+     * از حدس زدن نماد بر اساس نام‌های مبهم فارسی اکیداً خودداری می‌شود.
+     * اگر دارایی فاقد نماد معتبر باشد null بازگردانده شده و در UI عبارت «نیاز به تعیین نماد» نمایش داده می‌شود.
      */
     fun resolveStockSymbol(symbolOrKey: String, name: String = ""): String? {
         val s = normalizeSymbol(symbolOrKey)
-        val n = normalizeSymbol(name)
-
-        if (s.isNotBlank()) {
+        if (isValidStockSymbol(s)) {
             return s
         }
-
-        // اگر نماد خالی بود و نام سهم کوتاه و مشخص بود:
-        if (n.isNotBlank() && !n.contains(" ") && n.length in 2..10) {
-            return n
-        }
-
+        // اگر نماد وارد نشده است، از حدس زدن نام‌های مبهم خودداری می‌کنیم
         return null
     }
 
@@ -56,6 +59,8 @@ object StockInstrumentMapper {
      */
     fun isValidStockSymbol(symbol: String): Boolean {
         val normalized = normalizeSymbol(symbol)
-        return normalized.isNotBlank() && normalized.length in 2..15
+        return normalized.isNotBlank() && !normalized.contains(" ") && normalized.length in 2..15
     }
+
+    fun isValidSymbol(symbol: String): Boolean = isValidStockSymbol(symbol)
 }

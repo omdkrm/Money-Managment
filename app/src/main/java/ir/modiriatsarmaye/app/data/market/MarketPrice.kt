@@ -25,5 +25,8 @@ data class MarketPrice(
     val originalUnit: String? = null,
     val instrumentId: String = "",
     val latestPrice: Double? = null,
-    val closingPrice: Double? = null
-)
+    val closingPrice: Double? = null,
+    val adjustedPrice: Double? = null
+) {
+    val assetSymbolOrName: String get() = symbolOrName
+}

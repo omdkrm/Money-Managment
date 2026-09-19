@@ -447,4 +447,74 @@ class StockPriceSyncTest {
         // درصد رشد قیمت روز نسبت به میانگین خرید = ((500 - 400) / 400) * 100 = 25%
         assertEquals(25.0, holding.priceGrowthPercent!!, 0.01)
     }
+
+    /**
+     * ۱۴. رد قاطع عناوین و برچسب‌های عمومی نظیر «سهام»، «بازار سهام»، «بورس»، «قیمت سهام»
+     */
+    @Test
+    fun testRejectionOfGenericLabelsAsStockSymbol() {
+        val genericLabels = listOf("سهام", "بازار سهام", "بورس", "قیمت سهام", "سهام ", " بورس")
+        for (label in genericLabels) {
+            assertNull("Label '$label' must NOT be resolved as a valid stock symbol", StockInstrumentMapper.resolveStockSymbol(label))
+            assertFalse("Label '$label' must be rejected by isValidStockSymbol", StockInstrumentMapper.isValidStockSymbol(label))
+            assertFalse("Label '$label' must be rejected by isValidSymbol", StockInstrumentMapper.isValidSymbol(label))
+        }
+
+        // نمادهای واقعی باید پذیرفته شوند
+        assertTrue(StockInstrumentMapper.isValidStockSymbol("فولاد"))
+        assertTrue(StockInstrumentMapper.isValidStockSymbol("فملی"))
+        assertTrue(StockInstrumentMapper.isValidStockSymbol("شپنا"))
+        assertTrue(StockInstrumentMapper.isValidStockSymbol("وبملت"))
+    }
+
+    /**
+     * ۱۵. عدم استخراج اعداد تصادفی از صفحه عمومی بازار در صورت عدم تطابق نماد درخواستی
+     */
+    @Test
+    fun testRejectionOfUnrelatedNumbersFromGeneralPage() = runBlocking {
+        // صفحه عمومی بازار با عنوان "سهام" و عدد ۹,۴۳۳
+        val genericMarketHtml = """
+            <!DOCTYPE html>
+            <html lang="fa">
+            <head><title>بازار سهام و بورس - قیمت سهام</title></head>
+            <body>
+                <div class="market-overview">
+                    <span class="title">سهام</span>
+                    <span class="index-value">9,433</span>
+                </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val client = createMockClient(responseCode = 200, responseBody = genericMarketHtml)
+        val stockProvider = StockPriceProvider(client)
+
+        // استعلام برای نماد واقعی "فولاد" نباید عدد 9433 صفحه عمومی را استخراج کند
+        val result = stockProvider.fetchPriceForAsset("فولاد", AssetClass.STOCK)
+        assertFalse("Generic page number must not be extracted for specific stock", result.isSuccess)
+    }
+
+    /**
+     * ۱۶. اعتبارسنجی شفاف و صادقانه ۷ مرحله خط لوله در صورت نماد نامعتبر یا خطای استخراج
+     */
+    @Test
+    fun testPipelineDiagnosticHonestyOnGenericSymbol() = runBlocking {
+        val client = createMockClient(responseCode = 200, responseBody = "<html><body>سهام 9433</body></html>")
+        val stockProvider = StockPriceProvider(client)
+        val goldProvider = GoldPriceProvider(client)
+        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val repository = WealthRepository(database = db, marketDataProvider = composite)
+
+        val report = repository.syncStockPrice("سهام")
+        val diag = report.stockPipelineDiagnostic
+        assertNotNull(diag)
+        // بررسی صادقانه مراحل: هیچ مرحله‌ای نباید به دروغ SUCCESS گزارش شود
+        assertFalse("Provider result must be false for generic symbol", diag!!.providerResult)
+        assertFalse("Asset mapping must fail for generic symbol", diag.assetMappingSuccess)
+        assertFalse("Parser success must fail", diag.parserSuccess)
+        assertFalse("Persistence success must fail", diag.persistenceSuccess)
+        assertFalse("Read back success must fail", diag.readBackSuccess)
+        assertEquals(StockInstrumentMapper.SYMBOL_REQUIRED_LABEL, diag.mappedAssetId)
+        assertEquals(PriceStatus.UNAVAILABLE, diag.finalUiState)
+    }
 }

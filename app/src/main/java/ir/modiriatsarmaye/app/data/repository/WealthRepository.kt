@@ -1,6 +1,7 @@
 package ir.modiriatsarmaye.app.data.repository
 
 import android.content.Context
+import android.util.Log
 import ir.modiriatsarmaye.app.data.cloud.DriveBackupInfo
 import ir.modiriatsarmaye.app.data.cloud.GoogleAccountInfo
 import ir.modiriatsarmaye.app.data.cloud.GoogleDriveBackupManager
@@ -484,14 +485,17 @@ class WealthRepository(
             StockInstrumentMapper.resolveStockSymbol(targetStockSymbol)
         } else null
 
-        val stockReadBackEntity = if (!resolvedStockSymbol.isNullOrBlank()) {
-            currentPriceDao.getPrice(resolvedStockSymbol)
+        val isResolvedValid = resolvedStockSymbol != null && StockInstrumentMapper.isValidStockSymbol(resolvedStockSymbol)
+
+        val stockReadBackEntity = if (isResolvedValid) {
+            currentPriceDao.getPrice(resolvedStockSymbol!!)
                 ?: currentPriceDao.getPriceByInstrumentId(resolvedStockSymbol)
                 ?: currentPriceDao.getPrice(targetStockSymbol)
         } else null
 
-        val stockProviderSuccess = targetStockDiag?.isSuccess == true || (targetStockDiag?.providerResult == true)
-        val stockPersistenceSuccess = stockReadBackEntity != null && stockReadBackEntity.price > 0.0
+        val stockProviderSuccess = isResolvedValid && (targetStockDiag?.isSuccess == true || targetStockDiag?.providerResult == true)
+        val stockParserSuccess = isResolvedValid && (targetStockDiag?.parsingSuccess == true) && ((targetStockDiag.extractedPriceRial ?: 0.0) > 0.0)
+        val stockPersistenceSuccess = isResolvedValid && stockReadBackEntity != null && stockReadBackEntity.price > 0.0 && stockParserSuccess
         val stockReadBackSuccess = stockPersistenceSuccess
 
         val stockHolding = portfolio.holdings.find {
@@ -501,25 +505,25 @@ class WealthRepository(
                 it.assetName.equals(targetStockSymbol, ignoreCase = true)
             )
         }
-        val stockPortfolioSuccess = stockHolding != null && stockHolding.currentPriceToman != null && stockHolding.currentPriceToman > 0.0
+        val stockPortfolioSuccess = (stockHolding?.currentPriceToman ?: 0.0) > 0.0
 
         val stockPipelineDiag = if (targetStockSymbol.isNotBlank() || stockDiags.isNotEmpty()) {
             SyncPipelineDiagnostic(
                 providerResult = stockProviderSuccess,
                 httpStatusCode = targetStockDiag?.httpStatusCode ?: 0,
-                parserSuccess = targetStockDiag?.parsingSuccess ?: stockProviderSuccess,
-                extractedPriceRial = targetStockDiag?.extractedPriceRial ?: stockReadBackEntity?.let { PersianUtils.tomanToRial(it.price) },
-                assetMappingSuccess = resolvedStockSymbol != null,
-                mappedAssetId = resolvedStockSymbol ?: StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
+                parserSuccess = stockParserSuccess,
+                extractedPriceRial = if (isResolvedValid) (targetStockDiag?.extractedPriceRial ?: stockReadBackEntity?.let { PersianUtils.tomanToRial(it.price) }) else null,
+                assetMappingSuccess = isResolvedValid,
+                mappedAssetId = if (isResolvedValid) resolvedStockSymbol!! else StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
                 mappedAssetName = targetStockSymbol,
                 persistenceSuccess = stockPersistenceSuccess,
                 readBackSuccess = stockReadBackSuccess,
                 readBackPriceRial = stockReadBackEntity?.let { PersianUtils.tomanToRial(it.price) },
                 portfolioCalculationSuccess = stockPortfolioSuccess,
-                finalUiState = stockHolding?.currentPriceStatus ?: (if (stockPersistenceSuccess) PriceStatus.STALE else PriceStatus.UNAVAILABLE),
+                finalUiState = stockHolding?.currentPriceStatus ?: (if (stockReadBackEntity != null && stockReadBackEntity.price > 0.0) PriceStatus.STALE else PriceStatus.UNAVAILABLE),
                 finalPriceToman = stockHolding?.currentPriceToman ?: stockReadBackEntity?.price,
                 priceGrowthPct = stockHolding?.priceGrowthPercent,
-                failureReason = targetStockDiag?.errorMessage ?: targetStockDiag?.parserFailureReason
+                failureReason = if (!isResolvedValid) StockInstrumentMapper.SYMBOL_REQUIRED_LABEL else (targetStockDiag?.errorMessage ?: targetStockDiag?.parserFailureReason)
             )
         } else null
 
@@ -564,10 +568,22 @@ class WealthRepository(
             forceRefresh = forceRefresh
         )
 
+        var persistenceFailed = false
         if (report.updatedPrices.isNotEmpty()) {
-            currentPriceDao.insertPrices(report.updatedPrices)
-            val currentSettings = getSettings()
-            saveSettings(currentSettings.copy(lastPriceUpdateTimestamp = System.currentTimeMillis()))
+            val validPrices = report.updatedPrices.filter {
+                it.price > 0.0 && StockInstrumentMapper.isValidStockSymbol(it.assetSymbolOrName)
+            }
+            if (validPrices.isNotEmpty()) {
+                try {
+                    currentPriceDao.insertPrices(validPrices)
+                    val currentSettings = getSettings()
+                    saveSettings(currentSettings.copy(lastPriceUpdateTimestamp = System.currentTimeMillis()))
+                    Log.i(TAG, "Successfully persisted ${validPrices.size} stock prices to Room")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to persist stock prices to Room in syncAllStockPrices", e)
+                    persistenceFailed = true
+                }
+            }
         }
 
         val updatedAllPrices = currentPriceDao.getAllPrices()
@@ -583,13 +599,15 @@ class WealthRepository(
         val targetSymbol = primaryStockDiag?.symbol?.ifBlank { primaryStockDiag.extractedSymbol }
             ?: stockAssets.firstOrNull()?.first ?: ""
         val resolvedSymbol = StockInstrumentMapper.resolveStockSymbol(targetSymbol)
+        val isResolvedValid = resolvedSymbol != null && StockInstrumentMapper.isValidStockSymbol(resolvedSymbol)
 
-        val readBackEntity = if (!resolvedSymbol.isNullOrBlank()) {
-            currentPriceDao.getPrice(resolvedSymbol) ?: currentPriceDao.getPriceByInstrumentId(resolvedSymbol)
+        val readBackEntity = if (isResolvedValid) {
+            currentPriceDao.getPrice(resolvedSymbol!!) ?: currentPriceDao.getPriceByInstrumentId(resolvedSymbol)
         } else null
 
-        val providerSuccess = primaryStockDiag?.isSuccess == true || (primaryStockDiag?.providerResult == true)
-        val persistenceSuccess = readBackEntity != null && readBackEntity.price > 0.0
+        val providerSuccess = isResolvedValid && (primaryStockDiag?.isSuccess == true || primaryStockDiag?.providerResult == true)
+        val parserSuccess = isResolvedValid && primaryStockDiag?.parsingSuccess == true && (primaryStockDiag.extractedPriceRial ?: 0.0) > 0.0
+        val persistenceSuccess = !persistenceFailed && isResolvedValid && readBackEntity != null && readBackEntity.price > 0.0 && parserSuccess
         val readBackSuccess = persistenceSuccess
         val stockHolding = portfolio.holdings.find {
             it.assetClass == AssetClass.STOCK && (
@@ -597,29 +615,29 @@ class WealthRepository(
                 it.assetSymbol.equals(targetSymbol, ignoreCase = true)
             )
         }
-        val portfolioSuccess = stockHolding != null && stockHolding.currentPriceToman != null && stockHolding.currentPriceToman > 0.0
+        val portfolioSuccess = (stockHolding?.currentPriceToman ?: 0.0) > 0.0
 
         val pipelineDiag = SyncPipelineDiagnostic(
             providerResult = providerSuccess,
             httpStatusCode = primaryStockDiag?.httpStatusCode ?: 0,
-            parserSuccess = primaryStockDiag?.parsingSuccess ?: providerSuccess,
-            extractedPriceRial = primaryStockDiag?.extractedPriceRial ?: readBackEntity?.let { PersianUtils.tomanToRial(it.price) },
-            assetMappingSuccess = resolvedSymbol != null,
-            mappedAssetId = resolvedSymbol ?: StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
+            parserSuccess = parserSuccess,
+            extractedPriceRial = if (isResolvedValid) (primaryStockDiag?.extractedPriceRial ?: readBackEntity?.let { PersianUtils.tomanToRial(it.price) }) else null,
+            assetMappingSuccess = isResolvedValid,
+            mappedAssetId = if (isResolvedValid) resolvedSymbol!! else StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
             mappedAssetName = targetSymbol,
             persistenceSuccess = persistenceSuccess,
             readBackSuccess = readBackSuccess,
             readBackPriceRial = readBackEntity?.let { PersianUtils.tomanToRial(it.price) },
             portfolioCalculationSuccess = portfolioSuccess,
-            finalUiState = stockHolding?.currentPriceStatus ?: (if (persistenceSuccess) PriceStatus.STALE else PriceStatus.UNAVAILABLE),
+            finalUiState = stockHolding?.currentPriceStatus ?: (if (readBackEntity != null && readBackEntity.price > 0.0) PriceStatus.STALE else PriceStatus.UNAVAILABLE),
             finalPriceToman = stockHolding?.currentPriceToman ?: readBackEntity?.price,
             priceGrowthPct = stockHolding?.priceGrowthPercent,
-            failureReason = primaryStockDiag?.errorMessage ?: primaryStockDiag?.parserFailureReason
+            failureReason = if (!isResolvedValid) StockInstrumentMapper.SYMBOL_REQUIRED_LABEL else (primaryStockDiag?.errorMessage ?: primaryStockDiag?.parserFailureReason)
         )
 
         return report.copy(
             stockPipelineDiagnostic = pipelineDiag,
-            messageFa = if (providerSuccess) "قیمت سهام با موفقیت بروزرسانی شد." else report.messageFa
+            messageFa = if (providerSuccess && persistenceSuccess) "قیمت سهام با موفقیت بروزرسانی شد." else (if (!isResolvedValid) StockInstrumentMapper.SYMBOL_REQUIRED_LABEL else report.messageFa)
         )
     }
 
@@ -632,10 +650,12 @@ class WealthRepository(
         val existingPrices = currentPriceDao.getAllPrices()
         val existing = existingPrices.find {
             it.assetSymbolOrName.equals(symbol, ignoreCase = true) ||
-            (resolvedSymbol != null && it.assetSymbolOrName.equals(resolvedSymbol, ignoreCase = true))
+            (resolvedSymbol != null && it.assetSymbolOrName.equals(resolvedSymbol, ignoreCase = true)) ||
+            (resolvedSymbol != null && it.instrumentId.equals(resolvedSymbol, ignoreCase = true))
         }
 
         if (resolvedSymbol == null) {
+            Log.w(TAG, "syncStockPrice: '$symbol' has no valid ticker -> ${StockInstrumentMapper.SYMBOL_REQUIRED_LABEL}")
             val errDiag = StrategyDiagnostic(
                 testId = "STOCK_SINGLE_VALIDATION",
                 testNameFa = "اعتبارسنجی نماد بورس",
@@ -644,18 +664,34 @@ class WealthRepository(
                 parserFailureReason = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
                 errorMessage = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
                 isSuccess = false,
+                providerResult = false,
+                symbolMappingSuccess = false,
+                parsingSuccess = false,
                 instrumentType = "STOCK"
             )
             val pipelineDiag = SyncPipelineDiagnostic(
                 providerResult = false,
+                httpStatusCode = 0,
+                parserSuccess = false,
+                extractedPriceRial = null,
                 assetMappingSuccess = false,
                 mappedAssetId = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL,
                 mappedAssetName = symbol,
-                finalUiState = PriceStatus.UNAVAILABLE,
+                persistenceSuccess = false,
+                readBackSuccess = false,
+                readBackPriceRial = existing?.let { PersianUtils.tomanToRial(it.price) },
+                portfolioCalculationSuccess = false,
+                finalUiState = if (existing != null && existing.price > 0.0) PriceStatus.STALE else PriceStatus.UNAVAILABLE,
+                finalPriceToman = existing?.price,
                 failureReason = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL
             )
             if (existing != null && existing.price > 0.0) {
-                currentPriceDao.insertPrices(listOf(existing.copy(status = PriceStatus.STALE, errorMessage = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL)))
+                try {
+                    currentPriceDao.insertPrices(listOf(existing.copy(status = PriceStatus.STALE, errorMessage = StockInstrumentMapper.SYMBOL_REQUIRED_LABEL)))
+                    Log.i(TAG, "Preserved existing price for '$symbol' as STALE: ${existing.price} Toman")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to update existing price to STALE", e)
+                }
             }
             return MarketUpdateReport(
                 updatedCount = 0,
@@ -673,6 +709,54 @@ class WealthRepository(
 
         if (singleRes.isSuccess && singleRes.getOrNull() != null) {
             val mp = singleRes.getOrNull()!!
+
+            // اعتبارسنجی قطعی خروجی پارسر: قیمت باید بزرگتر از صفر بوده و متعلق به نماد درخواستی باشد
+            val isValidPrice = mp.price > 0.0 && (mp.originalPrice ?: 0.0) > 0.0
+            val isMatchingSymbol = StockInstrumentMapper.normalizeSymbol(mp.symbolOrName) == resolvedSymbol ||
+                    StockInstrumentMapper.normalizeSymbol(mp.instrumentId) == resolvedSymbol
+
+            if (!isValidPrice || !isMatchingSymbol) {
+                val validationErr = if (!isValidPrice) "قیمت استخراج شده نامعتبر است (${mp.price})" else "نماد استخراج شده (${mp.symbolOrName}) با نماد درخواستی ($resolvedSymbol) مطابقت ندارد."
+                Log.e(TAG, "Stock validation failed for $resolvedSymbol: $validationErr")
+
+                var preservedAsStale = false
+                if (existing != null && existing.price > 0.0) {
+                    try {
+                        currentPriceDao.insertPrices(listOf(existing.copy(status = PriceStatus.STALE, errorMessage = validationErr)))
+                        preservedAsStale = true
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to preserve existing price as STALE", e)
+                    }
+                }
+
+                val pipelineDiag = SyncPipelineDiagnostic(
+                    providerResult = false,
+                    httpStatusCode = primaryDiag?.httpStatusCode ?: 200,
+                    parserSuccess = false,
+                    extractedPriceRial = null,
+                    assetMappingSuccess = true,
+                    mappedAssetId = resolvedSymbol,
+                    mappedAssetName = existing?.assetName ?: resolvedSymbol,
+                    persistenceSuccess = false,
+                    readBackSuccess = false,
+                    readBackPriceRial = existing?.let { PersianUtils.tomanToRial(it.price) },
+                    portfolioCalculationSuccess = false,
+                    finalUiState = if (preservedAsStale) PriceStatus.STALE else PriceStatus.UNAVAILABLE,
+                    finalPriceToman = existing?.price,
+                    failureReason = validationErr
+                )
+
+                return MarketUpdateReport(
+                    updatedCount = 0,
+                    failedCount = 1,
+                    totalCount = 1,
+                    messageFa = validationErr,
+                    stockDiagnostics = diags,
+                    stockPipelineDiagnostic = pipelineDiag
+                )
+            }
+
+            // ثبت رکورد در Room
             val newEntity = CurrentPriceEntity(
                 assetSymbolOrName = resolvedSymbol,
                 assetName = existing?.assetName ?: resolvedSymbol,
@@ -688,14 +772,37 @@ class WealthRepository(
                 errorMessage = null,
                 instrumentId = resolvedSymbol
             )
-            currentPriceDao.insertPrices(listOf(newEntity))
-            val currentSettings = getSettings()
-            saveSettings(currentSettings.copy(lastPriceUpdateTimestamp = System.currentTimeMillis()))
 
-            val readBack = currentPriceDao.getPrice(resolvedSymbol) ?: currentPriceDao.getPriceByInstrumentId(resolvedSymbol)
-            val persistenceSuccess = readBack != null && readBack.price > 0.0
-            val isMatch = readBack != null && kotlin.math.abs(readBack.price - mp.price) < 0.01
+            val entitiesToInsert = mutableListOf(newEntity)
+            if (!symbol.equals(resolvedSymbol, ignoreCase = true)) {
+                entitiesToInsert.add(newEntity.copy(assetSymbolOrName = symbol))
+            }
+
+            var persistenceSuccess = false
+            try {
+                currentPriceDao.insertPrices(entitiesToInsert)
+                persistenceSuccess = true
+                val currentSettings = getSettings()
+                saveSettings(currentSettings.copy(lastPriceUpdateTimestamp = System.currentTimeMillis()))
+                Log.i(TAG, "Successfully persisted stock price to Room for $resolvedSymbol: ${mp.price} Toman (${mp.originalPrice} Rial)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Room persistence FAILED for stock $resolvedSymbol: ${e.message}", e)
+                persistenceSuccess = false
+            }
+
+            // بازخوانی از Room جهت اعتبارسنجی خط لوله
+            val readBack = try {
+                currentPriceDao.getPrice(resolvedSymbol)
+                    ?: currentPriceDao.getPriceByInstrumentId(resolvedSymbol)
+                    ?: currentPriceDao.getPrice(symbol)
+            } catch (e: Exception) {
+                Log.e(TAG, "Room read-back FAILED for stock $resolvedSymbol: ${e.message}", e)
+                null
+            }
+
+            val isMatch = readBack != null && readBack.price > 0.0 && kotlin.math.abs(readBack.price - mp.price) < 0.01
             val readBackSuccess = persistenceSuccess && isMatch
+            Log.i(TAG, "Room read-back check for $resolvedSymbol: entity=${readBack?.assetSymbolOrName}, price=${readBack?.price}, match=$isMatch, readBackSuccess=$readBackSuccess")
 
             val updatedAllPrices = currentPriceDao.getAllPrices()
             val portfolio = CalculationEngine.calculatePortfolio(
@@ -707,10 +814,11 @@ class WealthRepository(
             val holding = portfolio.holdings.find {
                 it.assetClass == AssetClass.STOCK && (
                     it.assetSymbol.equals(resolvedSymbol, ignoreCase = true) ||
+                    it.assetSymbol.equals(symbol, ignoreCase = true) ||
                     it.assetName.equals(symbol, ignoreCase = true)
                 )
             }
-            val portfolioSuccess = holding != null && holding.currentPriceToman != null && holding.currentPriceToman > 0.0
+            val portfolioSuccess = (holding?.currentPriceToman ?: 0.0) > 0.0
 
             val pipelineDiag = SyncPipelineDiagnostic(
                 providerResult = true,
@@ -724,17 +832,21 @@ class WealthRepository(
                 readBackSuccess = readBackSuccess,
                 readBackPriceRial = readBack?.let { PersianUtils.tomanToRial(it.price) },
                 portfolioCalculationSuccess = portfolioSuccess,
-                finalUiState = holding?.currentPriceStatus ?: PriceStatus.FRESH,
+                finalUiState = if (readBackSuccess) (holding?.currentPriceStatus ?: PriceStatus.FRESH) else PriceStatus.STALE,
                 finalPriceToman = holding?.currentPriceToman ?: readBack?.price,
                 priceGrowthPct = holding?.priceGrowthPercent
             )
 
             return MarketUpdateReport(
-                updatedCount = 1,
-                failedCount = 0,
+                updatedCount = if (persistenceSuccess) 1 else 0,
+                failedCount = if (persistenceSuccess) 0 else 1,
                 totalCount = 1,
-                messageFa = "قیمت نماد $resolvedSymbol (${PersianUtils.formatMoney(mp.price, CurrencyType.TOMAN)}) با موفقیت بروزرسانی و در سبد اعمال شد.",
-                updatedPrices = listOf(newEntity),
+                messageFa = if (persistenceSuccess) {
+                    "قیمت نماد $resolvedSymbol (${PersianUtils.formatMoney(mp.price, CurrencyType.TOMAN)}) با موفقیت بروزرسانی و در سبد اعمال شد."
+                } else {
+                    "خطا در ثبت نرخ در پایگاه داده"
+                },
+                updatedPrices = if (persistenceSuccess) entitiesToInsert else emptyList(),
                 stockDiagnostics = diags,
                 stockPipelineDiagnostic = pipelineDiag
             )
@@ -743,10 +855,38 @@ class WealthRepository(
                 ?: primaryDiag?.errorMessage
                 ?: primaryDiag?.parserFailureReason
                 ?: "عدم دریافت نرخ از سرور"
+            Log.w(TAG, "Stock sync failed for $resolvedSymbol: $failureReason")
 
+            var preservedAsStale = false
             if (existing != null && existing.price > 0.0) {
-                currentPriceDao.insertPrices(listOf(existing.copy(status = PriceStatus.STALE, errorMessage = failureReason)))
+                try {
+                    currentPriceDao.insertPrices(listOf(existing.copy(status = PriceStatus.STALE, errorMessage = failureReason)))
+                    preservedAsStale = true
+                    Log.i(TAG, "Preserved existing price for $resolvedSymbol as STALE: ${existing.price} Toman")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to preserve existing price as STALE for $resolvedSymbol", e)
+                }
             }
+
+            val readBack = currentPriceDao.getPrice(resolvedSymbol)
+                ?: currentPriceDao.getPriceByInstrumentId(resolvedSymbol)
+                ?: currentPriceDao.getPrice(symbol)
+
+            val updatedAllPrices = currentPriceDao.getAllPrices()
+            val portfolio = CalculationEngine.calculatePortfolio(
+                transactions = allTxs,
+                prices = updatedAllPrices,
+                settings = getSettings(),
+                liabilities = liabilityDao.getAllLiabilities()
+            )
+            val holding = portfolio.holdings.find {
+                it.assetClass == AssetClass.STOCK && (
+                    it.assetSymbol.equals(resolvedSymbol, ignoreCase = true) ||
+                    it.assetSymbol.equals(symbol, ignoreCase = true) ||
+                    it.assetName.equals(symbol, ignoreCase = true)
+                )
+            }
+            val portfolioSuccess = (holding?.currentPriceToman ?: 0.0) > 0.0
 
             val pipelineDiag = SyncPipelineDiagnostic(
                 providerResult = false,
@@ -755,12 +895,13 @@ class WealthRepository(
                 assetMappingSuccess = true,
                 mappedAssetId = resolvedSymbol,
                 mappedAssetName = existing?.assetName ?: resolvedSymbol,
-                persistenceSuccess = existing != null && existing.price > 0.0,
+                persistenceSuccess = false,
                 readBackSuccess = false,
-                readBackPriceRial = existing?.let { PersianUtils.tomanToRial(it.price) },
-                portfolioCalculationSuccess = false,
-                finalUiState = if (existing != null && existing.price > 0.0) PriceStatus.STALE else PriceStatus.UNAVAILABLE,
-                finalPriceToman = existing?.price,
+                readBackPriceRial = readBack?.let { PersianUtils.tomanToRial(it.price) },
+                portfolioCalculationSuccess = portfolioSuccess,
+                finalUiState = if (preservedAsStale) PriceStatus.STALE else PriceStatus.UNAVAILABLE,
+                finalPriceToman = holding?.currentPriceToman ?: readBack?.price,
+                priceGrowthPct = holding?.priceGrowthPercent,
                 failureReason = failureReason
             )
 
@@ -864,5 +1005,9 @@ class WealthRepository(
         liabilityDao.clearAllLiabilities()
         dividendDao.clearAllDividends()
         InitialData.populateDatabase(database)
+    }
+
+    companion object {
+        private const val TAG = "WealthRepository"
     }
 }

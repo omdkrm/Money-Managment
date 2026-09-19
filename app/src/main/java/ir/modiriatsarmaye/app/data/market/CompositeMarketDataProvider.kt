@@ -154,14 +154,17 @@ class CompositeMarketDataProvider(
                             p.assetClass == AssetClass.STOCK && (
                                 StockInstrumentMapper.normalizeSymbol(p.symbolOrName) == resolvedStockSymbol ||
                                 StockInstrumentMapper.normalizeSymbol(p.instrumentId) == resolvedStockSymbol
-                            )
+                            ) && p.price > 0.0 && StockInstrumentMapper.isValidStockSymbol(p.symbolOrName)
                         }
                     }
                     // در صورت عدم وجود در جدول کلی، استعلام مستقیم پروفایل اختصاصی سهم
                     if (matched == null && resolvedStockSymbol != null) {
                         val singleRes = stockProvider.fetchPriceForAsset(resolvedStockSymbol, AssetClass.STOCK)
                         if (singleRes.isSuccess && singleRes.getOrNull() != null) {
-                            matched = singleRes.getOrNull()
+                            val candidate = singleRes.getOrNull()
+                            if (candidate != null && candidate.price > 0.0 && StockInstrumentMapper.isValidStockSymbol(candidate.symbolOrName)) {
+                                matched = candidate
+                            }
                         }
                     }
                 }
@@ -241,6 +244,30 @@ class CompositeMarketDataProvider(
                             status = PriceStatus.FRESH,
                             errorMessage = null,
                             instrumentId = effectiveInstrumentId
+                        )
+                    )
+                }
+
+                // در صورت وجود نماد مشخص برای سهام، ثبت رکورد بر اساس نماد استاندارد در صورت تفاوت با کلید دارایی
+                if (assetClass == AssetClass.STOCK && !targetInstrumentId.isNullOrBlank() &&
+                    !assetKey.equals(targetInstrumentId, ignoreCase = true) &&
+                    updatedList.none { it.assetSymbolOrName.equals(targetInstrumentId, ignoreCase = true) }
+                ) {
+                    updatedList.add(
+                        CurrentPriceEntity(
+                            assetSymbolOrName = targetInstrumentId,
+                            assetName = if (existing != null && existing.assetName.isNotBlank()) existing.assetName else matched.name,
+                            assetClass = AssetClass.STOCK,
+                            price = matched.price,
+                            currency = matched.currency,
+                            source = matched.source,
+                            lastUpdated = System.currentTimeMillis(),
+                            unit = matched.unit,
+                            priceType = matched.priceType,
+                            isAutoUpdated = true,
+                            status = PriceStatus.FRESH,
+                            errorMessage = null,
+                            instrumentId = targetInstrumentId
                         )
                     )
                 }

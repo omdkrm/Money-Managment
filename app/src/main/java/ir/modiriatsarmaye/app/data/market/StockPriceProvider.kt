@@ -1,5 +1,6 @@
 package ir.modiriatsarmaye.app.data.market
 
+import android.util.Log
 import ir.modiriatsarmaye.app.data.model.AssetClass
 import ir.modiriatsarmaye.app.data.model.CurrencyType
 import ir.modiriatsarmaye.app.data.model.PriceStatus
@@ -30,6 +31,7 @@ class StockPriceProvider(
 ) : MarketDataProvider {
 
     companion object {
+        private const val TAG = "StockPriceSync"
         const val TSETMC_MARKETWATCH_URL = "https://cdn.tsetmc.com/api/ClosingPrice/GetMarketWatch?market=0&showAll=true"
         const val TGJU_STOCK_TABLE_URL = "https://www.tgju.org/stock"
         const val TGJU_GEM_STOCK_URL = "https://gem.tgju.org/markets/stock"
@@ -68,7 +70,12 @@ class StockPriceProvider(
             url = TSETMC_MARKETWATCH_URL
         )
         diagnosticsList.add(diagTsetmc.first)
-        diagTsetmc.second.forEach { allPrices[it.symbolOrName] = it }
+        diagTsetmc.second.forEach {
+            val key = StockInstrumentMapper.normalizeSymbol(it.symbolOrName)
+            if (key.isNotBlank() && StockInstrumentMapper.isValidStockSymbol(key) && !allPrices.containsKey(key)) {
+                allPrices[key] = it
+            }
+        }
 
         // ۲. در صورت خالی بودن داده‌ها، راهبرد پشتیبان: جدول بازار سهام TGJU (HTML Fallback)
         if (allPrices.isEmpty()) {
@@ -78,7 +85,12 @@ class StockPriceProvider(
                 url = TGJU_STOCK_TABLE_URL
             )
             diagnosticsList.add(diagHtml.first)
-            diagHtml.second.forEach { allPrices[it.symbolOrName] = it }
+            diagHtml.second.forEach {
+                val key = StockInstrumentMapper.normalizeSymbol(it.symbolOrName)
+                if (key.isNotBlank() && StockInstrumentMapper.isValidStockSymbol(key) && !allPrices.containsKey(key)) {
+                    allPrices[key] = it
+                }
+            }
         }
 
         // ۳. در صورت نیاز، منبع مکمل دوم TGJU Gem
@@ -89,7 +101,12 @@ class StockPriceProvider(
                 url = TGJU_GEM_STOCK_URL
             )
             diagnosticsList.add(diagGem.first)
-            diagGem.second.forEach { allPrices[it.symbolOrName] = it }
+            diagGem.second.forEach {
+                val key = StockInstrumentMapper.normalizeSymbol(it.symbolOrName)
+                if (key.isNotBlank() && StockInstrumentMapper.isValidStockSymbol(key) && !allPrices.containsKey(key)) {
+                    allPrices[key] = it
+                }
+            }
         }
 
         lastDiagnostics = diagnosticsList
@@ -106,12 +123,17 @@ class StockPriceProvider(
 
     /**
      * استعلام و دریافت نرخ روز برای یک سهم مشخص بر اساس نماد قطعی
-     * از حدس زدن نماد بر اساس نام‌های مبهم فارسی خودداری می‌شود.
+     * با اولویت‌بندی دقیق:
+     * ۱. صفحه اختصاصی پروفایل نماد
+     * ۲. دیده‌بان بازار TSETMC با داده‌های ساخت‌یافته JSON
+     * ۳. سطر اختصاصی نماد در جدول بازار سهام
      */
     override suspend fun fetchPriceForAsset(symbolOrName: String, assetClass: AssetClass): Result<MarketPrice?> = withContext(Dispatchers.IO) {
         if (assetClass != AssetClass.STOCK) return@withContext Result.success(null)
 
         val resolvedSymbol = StockInstrumentMapper.resolveStockSymbol(symbolOrName)
+        Log.d(TAG, "fetchPriceForAsset - Requested ticker: '$symbolOrName', Normalized ticker: '$resolvedSymbol'")
+
         if (resolvedSymbol.isNullOrBlank()) {
             val errDiag = StrategyDiagnostic(
                 testId = "STOCK_SYMBOL_VALIDATION",
@@ -127,57 +149,138 @@ class StockPriceProvider(
                 instrumentType = "STOCK"
             )
             lastDiagnostics = listOf(errDiag)
+            Log.w(TAG, "Ticker validation failed: '$symbolOrName' -> ${StockInstrumentMapper.SYMBOL_REQUIRED_LABEL}")
             return@withContext Result.failure(IllegalArgumentException(StockInstrumentMapper.SYMBOL_REQUIRED_LABEL))
         }
 
-        // ۱. ابتدا جستجو در منبع کلی / کش ساخت‌یافته
-        val allResult = fetchPrices()
-        if (allResult.isSuccess) {
-            val list = allResult.getOrNull() ?: emptyList()
-            val match = list.firstOrNull {
-                StockInstrumentMapper.normalizeSymbol(it.symbolOrName) == resolvedSymbol ||
-                StockInstrumentMapper.normalizeSymbol(it.instrumentId) == resolvedSymbol
-            }
-            if (match != null) {
-                // ثبت نتیجه موفق برای این نماد در دیاگنوستیک
-                val successDiag = StrategyDiagnostic(
-                    testId = "STOCK_MATCH_$resolvedSymbol",
-                    testNameFa = "یافتن نماد $resolvedSymbol در دیده‌بان بازار",
-                    url = TSETMC_MARKETWATCH_URL,
-                    httpStatusCode = 200,
-                    contentType = "application/json",
-                    parserStrategy = "Structured MarketWatch Matcher",
-                    isSuccess = true,
-                    extractedSymbol = resolvedSymbol,
-                    extractedPrice = match.price,
-                    extractedPriceRial = match.originalPrice,
-                    priceUnit = "ریال / سهم",
-                    symbol = resolvedSymbol,
-                    latestPriceRial = match.latestPrice?.let { PersianUtils.tomanToRial(it) } ?: match.originalPrice,
-                    closingPriceRial = match.closingPrice?.let { PersianUtils.tomanToRial(it) },
-                    latestPriceToman = match.latestPrice,
-                    closingPriceToman = match.closingPrice,
-                    providerResult = true,
-                    symbolMappingSuccess = true,
-                    parsingSuccess = true,
-                    instrumentType = "STOCK"
-                )
-                lastDiagnostics = listOf(successDiag) + lastDiagnostics
-                return@withContext Result.success(match)
-            }
-        }
+        val allDiags = mutableListOf<StrategyDiagnostic>()
 
-        // ۲. در صورت عدم وجود در دیده‌بان کلی، استعلام صفحه اختصاصی پروفایل نماد
+        // ۱. اولویت اول: استعلام صفحه اختصاصی پروفایل نماد
         val profileUrl = "https://www.tgju.org/profile/stock-$resolvedSymbol"
-        val diag = executeSingleStockProfile(resolvedSymbol, profileUrl)
-        lastDiagnostics = listOf(diag.first) + lastDiagnostics
+        Log.d(TAG, "Step 1: Querying specific profile for $resolvedSymbol at $profileUrl")
+        val (profileDiag, profilePrice) = executeSingleStockProfile(resolvedSymbol, profileUrl)
+        allDiags.add(profileDiag)
 
-        if (diag.second != null) {
-            Result.success(diag.second)
-        } else {
-            val reason = diag.first.errorMessage ?: diag.first.parserFailureReason ?: "نرخ روز نماد $resolvedSymbol یافت نشد."
-            Result.failure(IOException(reason))
+        if (profilePrice != null && profilePrice.price > 0.0) {
+            Log.i(TAG, "Step 1 SUCCESS - Found in profile: symbol=${profilePrice.symbolOrName}, priceRial=${profilePrice.originalPrice}, priceToman=${profilePrice.price}")
+            lastDiagnostics = allDiags
+            return@withContext Result.success(profilePrice)
         }
+
+        // ۲. اولویت دوم: استعلام داده‌های ساخت‌یافته JSON دیده‌بان بازار TSETMC
+        Log.d(TAG, "Step 2: Checking structured TSETMC JSON for $resolvedSymbol")
+        val (tsetmcDiag, tsetmcList) = executeTsetmcJsonFetch(
+            testId = "TSETMC_MARKETWATCH_JSON",
+            testNameFa = "دیده‌بان بازار بورس TSETMC (JSON)",
+            url = TSETMC_MARKETWATCH_URL
+        )
+        allDiags.add(tsetmcDiag)
+
+        val structuredMatch = tsetmcList.firstOrNull {
+            StockInstrumentMapper.normalizeSymbol(it.symbolOrName) == resolvedSymbol ||
+            StockInstrumentMapper.normalizeSymbol(it.instrumentId) == resolvedSymbol
+        }
+
+        if (structuredMatch != null && structuredMatch.price > 0.0) {
+            val successDiag = StrategyDiagnostic(
+                testId = "STOCK_MATCH_$resolvedSymbol",
+                testNameFa = "یافتن نماد $resolvedSymbol در دیده‌بان بازار",
+                url = TSETMC_MARKETWATCH_URL,
+                httpStatusCode = 200,
+                contentType = "application/json",
+                parserStrategy = "Structured MarketWatch Matcher",
+                isSuccess = true,
+                extractedSymbol = resolvedSymbol,
+                extractedPrice = structuredMatch.price,
+                extractedPriceRial = structuredMatch.originalPrice,
+                priceUnit = "ریال / سهم",
+                symbol = resolvedSymbol,
+                latestPriceRial = structuredMatch.latestPrice?.let { PersianUtils.tomanToRial(it) } ?: structuredMatch.originalPrice,
+                closingPriceRial = structuredMatch.closingPrice?.let { PersianUtils.tomanToRial(it) },
+                latestPriceToman = structuredMatch.latestPrice,
+                closingPriceToman = structuredMatch.closingPrice,
+                providerResult = true,
+                symbolMappingSuccess = true,
+                parsingSuccess = true,
+                instrumentType = "STOCK"
+            )
+            Log.i(TAG, "Step 2 SUCCESS - Found in structured JSON: symbol=${structuredMatch.symbolOrName}, priceRial=${structuredMatch.originalPrice}, priceToman=${structuredMatch.price}")
+            allDiags.add(0, successDiag)
+            lastDiagnostics = allDiags
+            return@withContext Result.success(structuredMatch)
+        }
+
+        // ۳. اولویت سوم: استعلام جدول عمومی بازار و تطبیق دقیق سطر بر اساس نماد
+        Log.d(TAG, "Step 3: Checking TGJU fallback table for exact row matching $resolvedSymbol")
+        val (tgjuDiag, tgjuList) = executeTgjuTableFetch(
+            testId = "TGJU_STOCK_TABLE_HTML",
+            testNameFa = "جدول سهام TGJU (HTML Fallback)",
+            url = TGJU_STOCK_TABLE_URL
+        )
+        allDiags.add(tgjuDiag)
+
+        val tableMatch = tgjuList.firstOrNull {
+            StockInstrumentMapper.normalizeSymbol(it.symbolOrName) == resolvedSymbol ||
+            StockInstrumentMapper.normalizeSymbol(it.instrumentId) == resolvedSymbol
+        }
+
+        if (tableMatch != null && tableMatch.price > 0.0) {
+            val tableDiag = StrategyDiagnostic(
+                testId = "STOCK_TABLE_MATCH_$resolvedSymbol",
+                testNameFa = "یافتن سطر اختصاصی نماد $resolvedSymbol در جدول",
+                url = TGJU_STOCK_TABLE_URL,
+                httpStatusCode = 200,
+                contentType = "text/html",
+                parserStrategy = "TGJU HTML Row Matcher",
+                isSuccess = true,
+                extractedSymbol = resolvedSymbol,
+                extractedPrice = tableMatch.price,
+                extractedPriceRial = tableMatch.originalPrice,
+                priceUnit = "ریال / سهم",
+                symbol = resolvedSymbol,
+                latestPriceRial = tableMatch.latestPrice?.let { PersianUtils.tomanToRial(it) } ?: tableMatch.originalPrice,
+                closingPriceRial = tableMatch.closingPrice?.let { PersianUtils.tomanToRial(it) },
+                latestPriceToman = tableMatch.latestPrice,
+                closingPriceToman = tableMatch.closingPrice,
+                providerResult = true,
+                symbolMappingSuccess = true,
+                parsingSuccess = true,
+                instrumentType = "STOCK"
+            )
+            Log.i(TAG, "Step 3 SUCCESS - Found in table: symbol=${tableMatch.symbolOrName}, priceRial=${tableMatch.originalPrice}, priceToman=${tableMatch.price}")
+            allDiags.add(0, tableDiag)
+            lastDiagnostics = allDiags
+            return@withContext Result.success(tableMatch)
+        }
+
+        // در صورت عدم یافتن در هیچ‌یک از منابع
+        val networkError = allDiags.firstOrNull { 
+            it.errorMessage?.contains("وقفه", ignoreCase = true) == true || 
+            it.errorMessage?.contains("timeout", ignoreCase = true) == true ||
+            it.errorMessage?.contains("timed out", ignoreCase = true) == true
+        }?.errorMessage
+
+        val notFoundMsg = networkError ?: "نرخ روز نماد $resolvedSymbol در هیچ‌یک از منابع معتبر بازار یافت نشد."
+        Log.w(TAG, notFoundMsg)
+        val failureDiag = StrategyDiagnostic(
+            testId = "STOCK_NOT_FOUND_$resolvedSymbol",
+            testNameFa = "جستجوی نماد $resolvedSymbol در بازار",
+            url = profileUrl,
+            httpStatusCode = if (profileDiag.httpStatusCode != 0) profileDiag.httpStatusCode else tsetmcDiag.httpStatusCode,
+            contentType = profileDiag.contentType,
+            parserStrategy = "Multi-Source Stock Matcher",
+            parserFailureReason = notFoundMsg,
+            errorMessage = notFoundMsg,
+            isSuccess = false,
+            providerResult = false,
+            symbolMappingSuccess = true,
+            parsingSuccess = false,
+            instrumentType = "STOCK",
+            symbol = resolvedSymbol
+        )
+        allDiags.add(0, failureDiag)
+        lastDiagnostics = allDiags
+        return@withContext Result.failure(IOException(notFoundMsg))
     }
 
     /**
@@ -392,6 +495,7 @@ class StockPriceProvider(
         }
 
         val firstItem = extractedPrices.firstOrNull()
+        val isOk = extractedPrices.isNotEmpty()
         val diag = StrategyDiagnostic(
             testId = testId,
             testNameFa = testNameFa,
@@ -402,7 +506,7 @@ class StockPriceProvider(
             parserStrategy = "TGJU HTML Fallback Table Parser",
             parserFailureReason = failureReason,
             errorMessage = failureReason,
-            isSuccess = extractedPrices.isNotEmpty(),
+            isSuccess = isOk,
             responseBodyPreview = bodyPreview,
             durationMs = System.currentTimeMillis() - startTime,
             providerName = "TGJU",
@@ -411,9 +515,9 @@ class StockPriceProvider(
             extractedPrice = firstItem?.price,
             extractedPriceRial = firstItem?.originalPrice,
             priceUnit = "ریال / سهم",
-            providerResult = httpCode == 200,
-            symbolMappingSuccess = extractedPrices.isNotEmpty(),
-            parsingSuccess = extractedPrices.isNotEmpty()
+            providerResult = httpCode == 200 && isOk,
+            symbolMappingSuccess = isOk,
+            parsingSuccess = isOk
         )
 
         return Pair(diag, extractedPrices)
@@ -446,42 +550,52 @@ class StockPriceProvider(
 
             if (httpCode == 200) {
                 val body = response.body?.string() ?: ""
-                val priceInfo = parseSingleStockPriceFromProfile(body)
-                if (priceInfo != null && priceInfo.first > 0.0) {
-                    val latestPriceRial = priceInfo.first
-                    val closingPriceRial = priceInfo.second ?: latestPriceRial
-                    val valuationToman = PersianUtils.rialToToman(latestPriceRial)
-
-                    marketPrice = MarketPrice(
-                        symbolOrName = symbol,
-                        name = symbol,
-                        assetClass = AssetClass.STOCK,
-                        price = valuationToman,
-                        currency = CurrencyType.TOMAN,
-                        unit = "سهم",
-                        priceType = "STOCK_LAST_TRADE",
-                        source = "سامانه TGJU",
-                        timestamp = System.currentTimeMillis(),
-                        status = PriceStatus.FRESH,
-                        originalPrice = latestPriceRial,
-                        originalCurrency = CurrencyType.RIAL,
-                        originalUnit = "سهم",
-                        instrumentId = symbol,
-                        latestPrice = valuationToman,
-                        closingPrice = PersianUtils.rialToToman(closingPriceRial)
-                    )
+                // اول بررسی می‌کنیم که آیا محتوا به نماد تعلق دارد یا یک صفحه جنریک / نامربوط است
+                if (!verifyHtmlBelongsToSymbol(body, symbol)) {
+                    failureReason = "صفحه دریافت شده متعلق به نماد درخواستی ($symbol) نیست."
+                    Log.w(TAG, "Rejected profile page for $symbol: HTML does not belong to ticker $symbol")
                 } else {
-                    failureReason = "قیمت نماد $symbol در محتوای صفحه پروفایل یافت نشد."
+                    val priceInfo = parseSingleStockPriceFromProfile(body, symbol)
+                    if (priceInfo != null && priceInfo.first > 0.0) {
+                        val latestPriceRial = priceInfo.first
+                        val closingPriceRial = priceInfo.second ?: latestPriceRial
+                        val valuationToman = PersianUtils.rialToToman(latestPriceRial)
+
+                        marketPrice = MarketPrice(
+                            symbolOrName = symbol,
+                            name = symbol,
+                            assetClass = AssetClass.STOCK,
+                            price = valuationToman,
+                            currency = CurrencyType.TOMAN,
+                            unit = "سهم",
+                            priceType = "STOCK_LAST_TRADE",
+                            source = "سامانه TGJU (Profile HTML)",
+                            timestamp = System.currentTimeMillis(),
+                            status = PriceStatus.FRESH,
+                            originalPrice = latestPriceRial,
+                            originalCurrency = CurrencyType.RIAL,
+                            originalUnit = "سهم",
+                            instrumentId = symbol,
+                            latestPrice = valuationToman,
+                            closingPrice = PersianUtils.rialToToman(closingPriceRial)
+                        )
+                        Log.i(TAG, "Extracted profile price for $symbol: Rial=$latestPriceRial, Toman=$valuationToman")
+                    } else {
+                        failureReason = "قیمت معتبر برای نماد $symbol در محتوای صفحه پروفایل یافت نشد."
+                    }
                 }
             } else {
                 failureReason = "کد پاسخ ناموفق: HTTP $httpCode"
             }
+        } catch (e: SocketTimeoutException) {
+            failureReason = "پایان مهلت زمانی اتصال به سرور (Connection timed out)"
         } catch (e: Throwable) {
             failureReason = e.message ?: "خطای اتصال به پروفایل نماد"
         } finally {
             try { response?.close() } catch (_: Throwable) {}
         }
 
+        val isOk = marketPrice != null && marketPrice.price > 0.0
         val diag = StrategyDiagnostic(
             testId = "STOCK_PROFILE_$symbol",
             testNameFa = "پروفایل اختصاصی نماد $symbol",
@@ -492,8 +606,8 @@ class StockPriceProvider(
             parserStrategy = "TGJU HTML Profile Parser",
             parserFailureReason = failureReason,
             errorMessage = failureReason,
-            isSuccess = marketPrice != null,
-            extractedSymbol = symbol,
+            isSuccess = isOk,
+            extractedSymbol = if (isOk) symbol else "",
             extractedPrice = marketPrice?.price,
             extractedPriceRial = marketPrice?.originalPrice,
             priceUnit = "ریال / سهم",
@@ -505,16 +619,50 @@ class StockPriceProvider(
             closingPriceRial = marketPrice?.closingPrice?.let { PersianUtils.tomanToRial(it) },
             latestPriceToman = marketPrice?.latestPrice,
             closingPriceToman = marketPrice?.closingPrice,
-            providerResult = httpCode == 200,
-            symbolMappingSuccess = true,
-            parsingSuccess = marketPrice != null
+            providerResult = httpCode == 200 && isOk,
+            symbolMappingSuccess = isOk,
+            parsingSuccess = isOk
         )
 
         return Pair(diag, marketPrice)
     }
 
     /**
+     * بررسی تعلق سند HTML به نماد درخواستی بورسی
+     */
+    fun verifyHtmlBelongsToSymbol(html: String, symbol: String): Boolean {
+        val norm = StockInstrumentMapper.normalizeSymbol(symbol)
+        if (norm.isBlank()) return false
+
+        // ۱. بررسی تگ title
+        val titleMatcher = Pattern.compile("""<title[^>]*>([^<]+)</title>""", Pattern.CASE_INSENSITIVE).matcher(html)
+        if (titleMatcher.find()) {
+            val titleText = StockInstrumentMapper.normalizeSymbol(titleMatcher.group(1) ?: "")
+            if (titleText.contains(norm)) return true
+        }
+
+        // ۲. بررسی تگ‌های عنوان یا نماد
+        val headingMatcher = Pattern.compile("""<(?:h1|h2|h3|strong|span|div)[^>]*class=["'][^"']*(?:title|symbol|item-name|box-title)[^"']*["'][^>]*>(?:<[^>]+>)*\s*([^<]+)""", Pattern.CASE_INSENSITIVE).matcher(html)
+        while (headingMatcher.find()) {
+            val text = StockInstrumentMapper.normalizeSymbol(headingMatcher.group(1) ?: "")
+            if (text.contains(norm)) return true
+        }
+
+        // ۳. بررسی شناسه‌ها یا کلاس‌های صفحه
+        if (html.contains("stock-$norm", ignoreCase = true) || 
+            html.contains("item-$norm", ignoreCase = true) ||
+            html.contains("profile/stock-$norm", ignoreCase = true)) {
+            return true
+        }
+
+        // ۴. تطبیق صریح نماد به عنوان واژه مستقل
+        val wordPattern = Pattern.compile("""(?<![\p{L}\p{N}])${Pattern.quote(norm)}(?![\p{L}\p{N}])""")
+        return wordPattern.matcher(html).find()
+    }
+
+    /**
      * تجزیه جدول HTML سهام با پشتیبانی از ساختارهای سنتی table و مدرن div/card
+     * با اعتبارسنجی اکید نماد هر سطر و عدم استخراج عناوین جنریک
      */
     fun parseStockTableHtml(html: String): List<MarketPrice> {
         val result = mutableListOf<MarketPrice>()
@@ -524,26 +672,20 @@ class StockPriceProvider(
         while (matcher.find()) {
             val rowContent = matcher.group(1) ?: continue
             val item = parseStockRow(rowContent)
-            if (item != null) {
+            if (item != null && StockInstrumentMapper.isValidStockSymbol(item.symbolOrName)) {
                 result.add(item)
             }
         }
 
-        // اگر جدولی وجود نداشت یا نمادی استخراج نشد، ساختارهای متداول div مانند instrument-box یا stock-box را بررسی می‌کنیم
+        // اگر جدولی وجود نداشت، ساختارهای متداول div مانند instrument-box یا stock-box را بررسی می‌کنیم
         if (result.isEmpty()) {
             val boxPattern = Pattern.compile("""<div[^>]*class=["'][^"']*(?:instrument|stock|item|card)[^"']*["'][^>]*>(.*?)(?=<div[^>]*class=["'][^"']*(?:instrument|stock|item|card)|$)""", Pattern.DOTALL or Pattern.CASE_INSENSITIVE)
             val bm = boxPattern.matcher(html)
             while (bm.find()) {
                 val boxContent = bm.group(1) ?: continue
                 val item = parseStockRow(boxContent)
-                if (item != null) {
+                if (item != null && StockInstrumentMapper.isValidStockSymbol(item.symbolOrName)) {
                     result.add(item)
-                }
-            }
-            if (result.isEmpty()) {
-                val singleItem = parseStockRow(html)
-                if (singleItem != null) {
-                    result.add(singleItem)
                 }
             }
         }
@@ -576,7 +718,8 @@ class StockPriceProvider(
         }
 
         val symbol = StockInstrumentMapper.normalizeSymbol(rawSymbol)
-        if (symbol.isBlank() || symbol.length > 15) return null
+        // بررسی دقیق اینکه آیا نماد استخراج شده واقعاً نماد معتبر سهام است یا خیر
+        if (!StockInstrumentMapper.isValidStockSymbol(symbol)) return null
 
         // ۲. استخراج قیمت‌ها
         var lastPriceRial: Double? = null
@@ -623,6 +766,8 @@ class StockPriceProvider(
         }
 
         val finalLatest = lastPriceRial ?: return null
+        if (finalLatest <= 0.0) return null
+
         val finalClosing = closingPriceRial ?: finalLatest
         val valuationPriceToman = PersianUtils.rialToToman(finalLatest)
 
@@ -649,7 +794,11 @@ class StockPriceProvider(
     /**
      * استخراج قیمت از صفحه پروفایل سهم (برگرداندن Pair(آخرین معامله, قیمت پایانی))
      */
-    fun parseSingleStockPriceFromProfile(html: String): Pair<Double, Double?>? {
+    fun parseSingleStockPriceFromProfile(html: String, requestedSymbol: String? = null): Pair<Double, Double?>? {
+        if (requestedSymbol != null && !verifyHtmlBelongsToSymbol(html, requestedSymbol)) {
+            return null
+        }
+
         var lastTrade: Double? = null
         var closing: Double? = null
 
@@ -658,7 +807,7 @@ class StockPriceProvider(
             Pattern.compile("""data-col=["']info\.last_trade\.PDrCotVal["'][^>]*>(?:<[^>]+>)*\s*([0-9۰-۹٠-٩,٬\s&;]+)""", Pattern.CASE_INSENSITIVE),
             Pattern.compile("""data-col=["']info\.last_price["'][^>]*>(?:<[^>]+>)*\s*([0-9۰-۹٠-٩,٬\s&;]+)""", Pattern.CASE_INSENSITIVE),
             Pattern.compile("""data-price=["']([0-9۰-۹٠-٩,٬\s&;]+)["']""", Pattern.CASE_INSENSITIVE),
-            Pattern.compile("""<(?:span|div)[^>]*class=["'][^"']*(?:price-val|price_val|info-price|last[-_]?price)[^"']*["'][^>]*>(?:<[^>]+>)*\s*([0-9۰-۹٠-٩,٬\s&;]+)""", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("""<(?:span|div|td)[^>]*class=["'][^"']*(?:price-val|price_val|info-price|last[-_]?price|trade)[^"']*["'][^>]*>(?:<[^>]+>)*\s*([0-9۰-۹٠-٩,٬\s&;]+)""", Pattern.CASE_INSENSITIVE),
             Pattern.compile("""<td[^>]*>[^<]*آخرین معامله[^<]*</td>\s*<td[^>]*>(?:<[^>]+>)*\s*([0-9۰-۹٠-٩,٬\s&;]+)""", Pattern.CASE_INSENSITIVE),
             Pattern.compile("""([0-9۰-۹٠-٩,٬]{3,12})\s*ریال""", Pattern.CASE_INSENSITIVE)
         )
@@ -692,16 +841,23 @@ class StockPriceProvider(
         }
 
         val effectivePrice = lastTrade ?: closing ?: return null
+        if (effectivePrice <= 0.0) return null
         return Pair(effectivePrice, closing)
     }
 
     /**
      * تمیزکاری پیشرفته اعداد، پشتیبانی از ارقام فارسی و عربی، علائم نگارشی،
      * کاراکترهای پنهان و کدهای اسکی HTML
+     * رد اعداد نامربوط مانند درصدها، تاریخ‌ها، و زمان‌ها
      */
     fun cleanNumber(raw: String): Double? {
         if (raw.isBlank()) return null
         var text = raw.trim()
+
+        // رد درصدها، تاریخ‌ها و زمان‌ها
+        if (text.contains("%") || text.contains("٪") || text.contains(":") || text.contains("/")) {
+            return null
+        }
 
         // حذف و تبدیل هویتهای HTML
         text = text
@@ -740,7 +896,9 @@ class StockPriceProvider(
             .replace(" ", "")
             .trim()
 
-        return text.toDoubleOrNull()
+        val parsed = text.toDoubleOrNull()
+        if (parsed == null || parsed <= 0.0) return null
+        return parsed
     }
 }
 

@@ -379,6 +379,27 @@ class WealthViewModel(
     }
 
     /**
+     * تصحیح نماد دارایی و بروزرسانی خودکار قیمت آن
+     */
+    fun correctAssetTicker(oldSymbolOrName: String, newTickerOrName: String) {
+        viewModelScope.launch {
+            _isMarketUpdating.value = true
+            try {
+                val res = repository.correctAssetTicker(oldSymbolOrName, newTickerOrName)
+                if (res.isSuccess) {
+                    _userSuccessMessage.value = "نماد دارایی با موفقیت به '${res.getOrNull()}' تغییر یافت و قیمت آن بروزرسانی شد."
+                } else {
+                    _userErrorMessage.value = res.exceptionOrNull()?.message ?: "خطا در تصحیح نماد"
+                }
+            } catch (e: Exception) {
+                _userErrorMessage.value = "خطا در تغییر نماد: ${e.localizedMessage}"
+            } finally {
+                _isMarketUpdating.value = false
+            }
+        }
+    }
+
+    /**
      * اتصال حساب Google
      */
     fun connectGoogleAccount(email: String, displayName: String, onComplete: ((Boolean, String?) -> Unit)? = null) {

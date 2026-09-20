@@ -36,37 +36,29 @@ class GoogleDriveBackupManager(
     private val driveCacheFile = File(context.filesDir, "google_drive_cloud_vault.json")
 
     /**
-     * بررسی و اعتبارسنجی ساختار فایل پشتیبان
+     * بررسی و اعتبارسنجی ساختار فایل پشتیبان با سازگاری عقب‌رو
      */
     fun validateBackupJson(jsonString: String): Result<DriveBackupInfo> {
-        return try {
-            val root = JSONObject(jsonString)
-            if (!root.has("transactions")) {
-                return Result.failure(Exception("ساختار فایل نامعتبر است: آرایه تراکنش‌ها یافت نشد."))
-            }
-
-            val txArray = root.getJSONArray("transactions")
-            val pricesCount = if (root.has("prices")) root.getJSONArray("prices").length() else 0
-            val goalsCount = if (root.has("goals")) root.getJSONArray("goals").length() else 0
-            val liabilitiesCount = if (root.has("liabilities")) root.getJSONArray("liabilities").length() else 0
-            val ts = root.optLong("timestamp", System.currentTimeMillis())
-
-            Result.success(
-                DriveBackupInfo(
-                    fileId = "drive_file_${ts}",
-                    fileName = "modiriat_sarmaye_backup.json",
-                    sizeBytes = jsonString.toByteArray(Charsets.UTF_8).size.toLong(),
-                    timestamp = ts,
-                    transactionsCount = txArray.length(),
-                    pricesCount = pricesCount,
-                    goalsCount = goalsCount,
-                    liabilitiesCount = liabilitiesCount,
-                    rawJson = jsonString
-                )
-            )
-        } catch (e: Exception) {
-            Result.failure(Exception("خطا در تجزیه ساختار پشتیبان: ${e.localizedMessage ?: "فرمت JSON نامعتبر"}"))
+        val report = ir.modiriatsarmaye.app.data.backup.SafeBackupManager.validateAndParseBackup(jsonString)
+        if (!report.isValid) {
+            val err = report.errors.firstOrNull() ?: "ساختار فایل پشتیبان نامعتبر است."
+            return Result.failure(Exception(err))
         }
+
+        val ts = System.currentTimeMillis()
+        return Result.success(
+            DriveBackupInfo(
+                fileId = "drive_file_${ts}",
+                fileName = "modiriat_sarmaye_backup.json",
+                sizeBytes = jsonString.toByteArray(Charsets.UTF_8).size.toLong(),
+                timestamp = ts,
+                transactionsCount = report.validTransactions.size,
+                pricesCount = report.validPrices.size,
+                goalsCount = report.validGoals.size,
+                liabilitiesCount = report.validLiabilities.size,
+                rawJson = jsonString
+            )
+        )
     }
 
     /**

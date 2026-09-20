@@ -46,5 +46,7 @@ data class StrategyDiagnostic(
     val persistenceSuccess: Boolean = false,
     val readBackSuccess: Boolean = false,
     val portfolioSuccess: Boolean = false,
-    val finalUiState: PriceStatus = PriceStatus.UNAVAILABLE
+    val finalUiState: PriceStatus = PriceStatus.UNAVAILABLE,
+    val insCode: String? = null,
+    val isin: String? = null
 )

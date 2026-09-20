@@ -20,7 +20,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 sealed class ValidationResult {
-    object Success : ValidationResult()
+    open class Success(
+        open val message: String = "عملیات با موفقیت انجام شد.",
+        open val report: ir.modiriatsarmaye.app.data.backup.BackupValidationReport? = null
+    ) : ValidationResult() {
+        companion object : Success()
+    }
     data class Error(val message: String) : ValidationResult()
 }
 
@@ -219,161 +224,38 @@ class WealthRepository(
     }
 
     /**
-     * پشتیبان‌گیری استاندارد (Export Backup) به صورت JSON
+     * پشتیبان‌گیری استاندارد (Export Backup) به صورت JSON با طرح‌واره مستند
      */
     suspend fun exportBackupJson(): String {
-        val root = JSONObject()
-        root.put("version", 1)
-        root.put("timestamp", System.currentTimeMillis())
-        root.put("appName", "مدیریت سرمایه")
-
-        // تراکنش‌ها
-        val txList = transactionDao.getAllTransactions()
-        val txArray = JSONArray()
-        for (tx in txList) {
-            val obj = JSONObject().apply {
-                put("id", tx.id)
-                put("datePersian", tx.datePersian)
-                put("timestamp", tx.timestamp)
-                put("assetClass", tx.assetClass.name)
-                put("assetName", tx.assetName)
-                put("assetSymbol", tx.assetSymbol)
-                put("action", tx.action.name)
-                put("quantity", tx.quantity)
-                put("unit", tx.unit)
-                if (tx.unitPrice != null) put("unitPrice", tx.unitPrice)
-                put("currency", tx.currency.name)
-                put("fees", tx.fees)
-                put("commissionType", tx.commissionType.name)
-                put("commissionRate", tx.commissionRate)
-                if (tx.totalAmount != null) put("totalAmount", tx.totalAmount)
-                put("brokerOrSource", tx.brokerOrSource)
-                put("notes", tx.notes)
-            }
-            txArray.put(obj)
-        }
-        root.put("transactions", txArray)
-
-        // قیمت‌ها
-        val prices = currentPriceDao.getAllPrices()
-        val priceArray = JSONArray()
-        for (p in prices) {
-            val obj = JSONObject().apply {
-                put("assetSymbolOrName", p.assetSymbolOrName)
-                put("assetName", p.assetName)
-                put("assetClass", p.assetClass.name)
-                put("price", p.price)
-                put("currency", p.currency.name)
-                put("source", p.source)
-                put("lastUpdated", p.lastUpdated)
-            }
-            priceArray.put(obj)
-        }
-        root.put("prices", priceArray)
-
-        // اهداف
-        val goals = goalDao.getAllGoals()
-        val goalArray = JSONArray()
-        for (g in goals) {
-            val obj = JSONObject().apply {
-                put("title", g.title)
-                put("targetAmountToman", g.targetAmountToman)
-                put("targetDatePersian", g.targetDatePersian)
-                put("category", g.category)
-                put("notes", g.notes)
-            }
-            goalArray.put(obj)
-        }
-        root.put("goals", goalArray)
-
-        // بدهی‌ها
-        val liabilities = liabilityDao.getAllLiabilities()
-        val liabArray = JSONArray()
-        for (l in liabilities) {
-            val obj = JSONObject().apply {
-                put("title", l.title)
-                put("totalAmountToman", l.totalAmountToman)
-                put("monthlyPaymentToman", l.monthlyPaymentToman)
-                put("dueDatePersian", l.dueDatePersian)
-                put("notes", l.notes)
-            }
-            liabArray.put(obj)
-        }
-        root.put("liabilities", liabArray)
-
-        return root.toString(2)
+        return ir.modiriatsarmaye.app.data.backup.SafeBackupManager.exportBackupJson(
+            transactions = transactionDao.getAllTransactions(),
+            prices = currentPriceDao.getAllPrices(),
+            goals = goalDao.getAllGoals(),
+            liabilities = liabilityDao.getAllLiabilities()
+        )
     }
 
     /**
-     * بازیابی فایل پشتیبان (Restore Backup) با صحت‌سنجی یکپارچگی
+     * پیش‌اعتبارسنجی ساختار فایل پشتیبان بدون دستکاری پایگاه داده
      */
-    suspend fun restoreBackupJson(jsonString: String): ValidationResult {
-        return try {
-            val root = JSONObject(jsonString)
-            if (!root.has("transactions")) {
-                return ValidationResult.Error("فایل پشتیبان نامعتبر است: ساختار تراکنش‌ها یافت نشد.")
-            }
+    fun validateBackupJson(jsonString: String): ir.modiriatsarmaye.app.data.backup.BackupValidationReport {
+        return ir.modiriatsarmaye.app.data.backup.SafeBackupManager.validateAndParseBackup(jsonString)
+    }
 
-            val txArray = root.getJSONArray("transactions")
-            val newTransactions = mutableListOf<TransactionEntity>()
-            for (i in 0 until txArray.length()) {
-                val obj = txArray.getJSONObject(i)
-                newTransactions.add(
-                    TransactionEntity(
-                        id = 0, // شناسه جدید تخصیص داده می‌شود
-                        datePersian = obj.getString("datePersian"),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                        assetClass = AssetClass.valueOf(obj.getString("assetClass")),
-                        assetName = obj.getString("assetName"),
-                        assetSymbol = obj.optString("assetSymbol", ""),
-                        action = TransactionAction.valueOf(obj.getString("action")),
-                        quantity = obj.getDouble("quantity"),
-                        unit = obj.getString("unit"),
-                        unitPrice = if (obj.has("unitPrice")) obj.getDouble("unitPrice") else null,
-                        currency = CurrencyType.valueOf(obj.optString("currency", "TOMAN")),
-                        fees = obj.optDouble("fees", 0.0),
-                        commissionType = if (obj.has("commissionType")) CommissionType.valueOf(obj.getString("commissionType")) else CommissionType.FIXED,
-                        commissionRate = obj.optDouble("commissionRate", obj.optDouble("fees", 0.0)),
-                        totalAmount = if (obj.has("totalAmount")) obj.getDouble("totalAmount") else null,
-                        brokerOrSource = obj.optString("brokerOrSource", ""),
-                        notes = obj.optString("notes", "")
-                    )
-                )
-            }
-
-            // قیمت‌ها
-            val newPrices = mutableListOf<CurrentPriceEntity>()
-            if (root.has("prices")) {
-                val priceArray = root.getJSONArray("prices")
-                for (i in 0 until priceArray.length()) {
-                    val obj = priceArray.getJSONObject(i)
-                    newPrices.add(
-                        CurrentPriceEntity(
-                            assetSymbolOrName = obj.getString("assetSymbolOrName"),
-                            assetName = obj.getString("assetName"),
-                            assetClass = AssetClass.valueOf(obj.getString("assetClass")),
-                            price = obj.getDouble("price"),
-                            currency = CurrencyType.valueOf(obj.optString("currency", "TOMAN")),
-                            source = obj.optString("source", "بازیابی پشتیبان"),
-                            lastUpdated = obj.optLong("lastUpdated", System.currentTimeMillis())
-                        )
-                    )
-                }
-            }
-
-            // اعمال با تراکنش امن
-            transactionDao.clearAllTransactions()
-            transactionDao.insertTransactions(newTransactions)
-
-            if (newPrices.isNotEmpty()) {
-                currentPriceDao.clearAllPrices()
-                currentPriceDao.insertPrices(newPrices)
-            }
-
-            ValidationResult.Success
-        } catch (e: Exception) {
-            ValidationResult.Error("خطا در بازیابی فایل پشتیبان: ${e.localizedMessage ?: "فرمت نامعتبر"}")
+    /**
+     * بازیابی فایل پشتیبان (Restore Backup) با صحت‌سنجی یکپارچگی، سازگاری عقب‌رو و تراکنش امن Room
+     */
+    suspend fun restoreBackupJson(jsonString: String, replaceExisting: Boolean = true): ValidationResult {
+        val report = ir.modiriatsarmaye.app.data.backup.SafeBackupManager.validateAndParseBackup(jsonString)
+        if (!report.isValid) {
+            val err = report.errors.firstOrNull() ?: "فایل پشتیبان نامعتبر است."
+            return ValidationResult.Error(err)
         }
+        return ir.modiriatsarmaye.app.data.backup.SafeBackupManager.executeSafeRestore(
+            database = database,
+            report = report,
+            replaceExisting = replaceExisting
+        )
     }
 
     /**
@@ -834,7 +716,10 @@ class WealthRepository(
                 portfolioCalculationSuccess = portfolioSuccess,
                 finalUiState = if (readBackSuccess) (holding?.currentPriceStatus ?: PriceStatus.FRESH) else PriceStatus.STALE,
                 finalPriceToman = holding?.currentPriceToman ?: readBack?.price,
-                priceGrowthPct = holding?.priceGrowthPercent
+                priceGrowthPct = holding?.priceGrowthPercent,
+                insCode = primaryDiag?.insCode,
+                isin = primaryDiag?.isin,
+                providerName = primaryDiag?.providerName
             )
 
             return MarketUpdateReport(
@@ -902,7 +787,10 @@ class WealthRepository(
                 finalUiState = if (preservedAsStale) PriceStatus.STALE else PriceStatus.UNAVAILABLE,
                 finalPriceToman = holding?.currentPriceToman ?: readBack?.price,
                 priceGrowthPct = holding?.priceGrowthPercent,
-                failureReason = failureReason
+                failureReason = failureReason,
+                insCode = primaryDiag?.insCode,
+                isin = primaryDiag?.isin,
+                providerName = primaryDiag?.providerName
             )
 
             return MarketUpdateReport(
@@ -913,6 +801,56 @@ class WealthRepository(
                 stockDiagnostics = diags,
                 stockPipelineDiagnostic = pipelineDiag
             )
+        }
+    }
+
+    /**
+     * اصلاح و تعیین نماد رسمی برای دارایی‌های بدون نماد یا نیازمند تصحیح
+     */
+    suspend fun correctAssetTicker(oldSymbolOrName: String, newTickerOrName: String): Result<String> {
+        val instrument = StockInstrumentMapper.resolveInstrument(newTickerOrName)
+            ?: StockInstrumentMapper.resolveInstrument(symbolOrKey = "", name = newTickerOrName)
+        if (instrument == null || !StockInstrumentMapper.isValidStockSymbol(instrument.symbol)) {
+            return Result.failure(IllegalArgumentException(StockInstrumentMapper.SYMBOL_REQUIRED_LABEL))
+        }
+
+        val resolvedTicker = instrument.symbol
+        val officialName = instrument.name
+
+        try {
+            // ۱. بروزرسانی تراکنش‌ها
+            val allTxs = transactionDao.getAllTransactions()
+            allTxs.forEach { tx ->
+                if (tx.assetClass == AssetClass.STOCK && (
+                    tx.assetSymbol.equals(oldSymbolOrName, ignoreCase = true) ||
+                    tx.assetName.equals(oldSymbolOrName, ignoreCase = true) ||
+                    tx.assetSymbol.isBlank() ||
+                    tx.assetSymbol == StockInstrumentMapper.SYMBOL_REQUIRED_LABEL
+                )) {
+                    transactionDao.insertTransaction(tx.copy(assetSymbol = resolvedTicker, assetName = officialName.ifBlank { tx.assetName }))
+                }
+            }
+
+            // ۲. بروزرسانی موجودیت قیمت روز در پایگاه داده
+            val existingOldPrice = currentPriceDao.getPrice(oldSymbolOrName)
+            if (existingOldPrice != null) {
+                currentPriceDao.deletePrice(existingOldPrice)
+                currentPriceDao.insertPrices(listOf(
+                    existingOldPrice.copy(
+                        assetSymbolOrName = resolvedTicker,
+                        assetName = officialName,
+                        instrumentId = resolvedTicker
+                    )
+                ))
+            }
+
+            // ۳. همگام‌سازی فوری قیمت با نماد تصحیح‌شده
+            syncStockPrice(resolvedTicker)
+
+            return Result.success(resolvedTicker)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to correct asset ticker for $oldSymbolOrName -> $resolvedTicker", e)
+            return Result.failure(e)
         }
     }
 

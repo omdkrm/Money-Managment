@@ -280,6 +280,18 @@ fun StockDiagnosticCard(
                     )
                     StockInfoRow(label = "Content type", value = contentType)
                     StockInfoRow(label = "Parser used", value = parserUsed)
+                    val providerName = primaryDiag?.providerName ?: pipelineDiagnostic?.providerName
+                    if (!providerName.isNullOrBlank()) {
+                        StockInfoRow(label = "Provider Name", value = providerName)
+                    }
+                    val insCode = primaryDiag?.insCode ?: pipelineDiagnostic?.insCode
+                    if (!insCode.isNullOrBlank()) {
+                        StockInfoRow(label = "TSETMC InsCode", value = insCode)
+                    }
+                    val isin = primaryDiag?.isin ?: pipelineDiagnostic?.isin
+                    if (!isin.isNullOrBlank()) {
+                        StockInfoRow(label = "ISIN Code", value = isin)
+                    }
                     StockInfoRow(label = "Extracted symbol", value = extractedSymbol)
                     StockInfoRow(
                         label = "Extracted price",

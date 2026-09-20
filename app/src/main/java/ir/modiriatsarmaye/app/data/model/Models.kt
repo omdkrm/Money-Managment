@@ -146,7 +146,10 @@ data class SyncPipelineDiagnostic(
     val finalUiState: PriceStatus = PriceStatus.UNAVAILABLE,
     val finalPriceToman: Double? = null,
     val priceGrowthPct: Double? = null,
-    val failureReason: String? = null
+    val failureReason: String? = null,
+    val insCode: String? = null,
+    val isin: String? = null,
+    val providerName: String? = null
 )
 
 /**

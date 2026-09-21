@@ -57,6 +57,7 @@ fun StockDiagnosticCard(
     diagnostics: List<StrategyDiagnostic>,
     modifier: Modifier = Modifier,
     pipelineDiagnostic: SyncPipelineDiagnostic? = null,
+    bulkSummaryFa: String? = null,
     onUpdateAllStocks: (() -> Unit)? = null,
     onUpdateIndividualStock: ((String) -> Unit)? = null,
     initialExpanded: Boolean = false
@@ -240,6 +241,32 @@ fun StockDiagnosticCard(
                                 PriceStatus.UNAVAILABLE -> LossRed
                             }
                         )
+                    }
+
+                    // گزارش تجمیعی بروزرسانی دسته‌ای سهام (Bulk Update Summary)
+                    if (!bulkSummaryFa.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "گزارش تجمیعی بروزرسانی دسته‌ای (Bulk Update Summary):",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = bulkSummaryFa,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))

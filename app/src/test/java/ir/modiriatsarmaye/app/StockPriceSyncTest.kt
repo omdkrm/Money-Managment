@@ -517,4 +517,241 @@ class StockPriceSyncTest {
         assertEquals(StockInstrumentMapper.SYMBOL_REQUIRED_LABEL, diag.mappedAssetId)
         assertEquals(PriceStatus.UNAVAILABLE, diag.finalUiState)
     }
+
+    /**
+     * ۱۷. اعتبارسنجی کامل چرخه بروزرسانی دسته‌ای سهام (Bulk Update Sequence):
+     * ذخیره‌سازی قطعی در Room، بازخوانی، محاسبه مجدد پرتفوی و اعمال در UI
+     */
+    @Test
+    fun testBulkStockPriceUpdateFlow() = runBlocking {
+        // ثبت دو دارایی سهامی در دیتابیس
+        val txFoolad = TransactionEntity(
+            id = 10,
+            datePersian = "1403/05/10",
+            timestamp = System.currentTimeMillis(),
+            assetName = "فولاد مبارکه",
+            assetSymbol = "فولاد",
+            assetClass = AssetClass.STOCK,
+            action = TransactionAction.BUY,
+            quantity = 1000.0,
+            unit = "سهم",
+            unitPrice = 400.0,
+            currency = CurrencyType.TOMAN,
+            totalAmount = 400_000.0
+        )
+        val txFelli = TransactionEntity(
+            id = 11,
+            datePersian = "1403/05/10",
+            timestamp = System.currentTimeMillis(),
+            assetName = "ملی صنایع مس ایران",
+            assetSymbol = "فملی",
+            assetClass = AssetClass.STOCK,
+            action = TransactionAction.BUY,
+            quantity = 500.0,
+            unit = "سهم",
+            unitPrice = 600.0,
+            currency = CurrencyType.TOMAN,
+            totalAmount = 300_000.0
+        )
+        db.transactionDao().insertTransaction(txFoolad)
+        db.transactionDao().insertTransaction(txFelli)
+
+        // ماک پاسخ TSETMC برای هر دو نماد
+        val tsetmcJson = """
+            {
+                "instrumentSearch": [
+                    {
+                        "lVal18AFC": "فولاد",
+                        "lVal30": "فولاد مبارکه اصفهان",
+                        "pClosing": 5200,
+                        "pDrCotVal": 5250,
+                        "insCode": "46348559193224090"
+                    },
+                    {
+                        "lVal18AFC": "فملی",
+                        "lVal30": "ملی صنایع مس ایران",
+                        "pClosing": 7500,
+                        "pDrCotVal": 7500,
+                        "insCode": "35425587644337450"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val client = createMockClient(responseCode = 200, responseBody = tsetmcJson)
+        val stockProvider = StockPriceProvider(client)
+        val goldProvider = GoldPriceProvider(client)
+        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val repository = WealthRepository(database = db, marketDataProvider = composite)
+
+        // فراخوانی بروزرسانی دسته‌ای کلیه سهام
+        val report = repository.syncAllStockPrices(forceRefresh = true)
+
+        // ۱. بررسی موفقیت خط لوله دسته‌ای
+        assertTrue("Bulk report must be successful", report.updatedCount > 0)
+        assertTrue("Portfolio recalculation must succeed", report.portfolioRecalculationSuccess)
+        assertTrue("UI refresh must succeed", report.uiRefreshSuccess)
+        assertTrue("Bulk update summary must be non-empty", report.bulkUpdateSummaryFa.isNotBlank())
+
+        // ۲. اعتبارسنجی ذخیره قطعی در Room و بازخوانی (Read-back)
+        val fooladPrice = db.currentPriceDao().getPrice("فولاد")
+        val felliPrice = db.currentPriceDao().getPrice("فملی")
+        assertNotNull("فولاد price must be persisted in Room", fooladPrice)
+        assertNotNull("فملی price must be persisted in Room", felliPrice)
+        assertEquals(520.0, fooladPrice!!.price, 0.01) // 5200 ریال = 520 تومان
+        assertEquals(750.0, felliPrice!!.price, 0.01)  // 7500 ریال = 750 تومان
+        assertEquals(PriceStatus.FRESH, fooladPrice.status)
+        assertEquals(PriceStatus.FRESH, felliPrice.status)
+
+        // ۳. بررسی بازتولید کامل پرتفوی با قیمت‌های جدید
+        val updatedTransactions = db.transactionDao().getAllTransactions()
+        val allPrices = db.currentPriceDao().getAllPrices()
+        val portfolio = CalculationEngine.calculatePortfolio(
+            transactions = updatedTransactions,
+            prices = allPrices,
+            settings = AppSettingsEntity()
+        )
+
+        val holdingFoolad = portfolio.holdings.find { it.assetSymbol == "فولاد" }
+        val holdingFelli = portfolio.holdings.find { it.assetSymbol == "فملی" }
+        assertNotNull(holdingFoolad)
+        assertNotNull(holdingFelli)
+
+        // ارزش روز فولاد = 1000 * 520 = 520,000 تومان
+        assertEquals(520_000.0, holdingFoolad!!.currentValueToman!!, 0.01)
+        // سود فولاد = 520,000 - 400,000 = 120,000 تومان
+        assertEquals(120_000.0, holdingFoolad.profitLossToman!!, 0.01)
+
+        // ارزش روز فملی = 500 * 750 = 375,000 تومان
+        assertEquals(375_000.0, holdingFelli!!.currentValueToman!!, 0.01)
+
+        // مجموع ارزش کل سبد = 520,000 + 375,000 = 895,000 تومان
+        assertEquals(895_000.0, portfolio.totalPortfolioValueToman, 0.01)
+
+        // ۴. بررسی اعتبارسنجی ۷ مرحله خط لوله گزارش دسته‌ای
+        val diag = report.stockPipelineDiagnostic
+        assertNotNull(diag)
+        assertTrue("Provider result must be true", diag!!.providerResult)
+        assertTrue("Symbol mapping must be true", diag.assetMappingSuccess)
+        assertTrue("Parser success must be true", diag.parserSuccess)
+        assertTrue("Persistence success must be true", diag.persistenceSuccess)
+        assertTrue("Read-back success must be true", diag.readBackSuccess)
+        assertTrue("Portfolio calculation success must be true", diag.portfolioCalculationSuccess)
+        assertEquals("Final UI state must be FRESH", PriceStatus.FRESH, diag.finalUiState)
+    }
+
+    /**
+     * ۱۸. اعتبارسنجی بروزرسانی دسته‌ای در حالت خرابی جزئی (Partial Failure):
+     * نماد معتبر بروزرسانی می‌شود، نماد نامعتبر با برچسب STALE حفظ می‌شود و خطای «نیاز به تعیین نماد» ثبت می‌گردد.
+     */
+    @Test
+    fun testBulkStockPricePartialFailureHandling() = runBlocking {
+        // ۱. دارایی با نماد معتبر (فولاد)
+        val txValid = TransactionEntity(
+            id = 20,
+            datePersian = "1403/05/10",
+            timestamp = System.currentTimeMillis(),
+            assetName = "فولاد مبارکه",
+            assetSymbol = "فولاد",
+            assetClass = AssetClass.STOCK,
+            action = TransactionAction.BUY,
+            quantity = 100.0,
+            unit = "سهم",
+            unitPrice = 400.0,
+            currency = CurrencyType.TOMAN,
+            totalAmount = 40_000.0
+        )
+        // ۲. دارایی با عنوان عمومی بدون نماد مشخص («سهام») که از قبل قیمت دارد
+        val txGeneric = TransactionEntity(
+            id = 21,
+            datePersian = "1403/05/10",
+            timestamp = System.currentTimeMillis(),
+            assetName = "سهام",
+            assetSymbol = "",
+            assetClass = AssetClass.STOCK,
+            action = TransactionAction.BUY,
+            quantity = 50.0,
+            unit = "سهم",
+            unitPrice = 300.0,
+            currency = CurrencyType.TOMAN,
+            totalAmount = 15_000.0
+        )
+        db.transactionDao().insertTransaction(txValid)
+        db.transactionDao().insertTransaction(txGeneric)
+
+        // قیمت قبلی برای دارایی نامعتبر
+        val oldGenericPrice = CurrentPriceEntity(
+            assetSymbolOrName = "سهام",
+            assetName = "سهام",
+            assetClass = AssetClass.STOCK,
+            price = 320.0,
+            currency = CurrencyType.TOMAN,
+            source = "قیمت قبلی",
+            lastUpdated = System.currentTimeMillis() - 86400000L,
+            status = PriceStatus.FRESH
+        )
+        db.currentPriceDao().insertPrices(listOf(oldGenericPrice))
+
+        val tsetmcJson = """
+            {
+                "instrumentSearch": [
+                    {
+                        "lVal18AFC": "فولاد",
+                        "lVal30": "فولاد مبارکه اصفهان",
+                        "pClosing": 5000,
+                        "pDrCotVal": 5000,
+                        "insCode": "46348559193224090"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val client = createMockClient(responseCode = 200, responseBody = tsetmcJson)
+        val stockProvider = StockPriceProvider(client)
+        val goldProvider = GoldPriceProvider(client)
+        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val repository = WealthRepository(database = db, marketDataProvider = composite)
+
+        val report = repository.syncAllStockPrices(forceRefresh = true)
+
+        // بررسی بروزرسانی موفق فولاد
+        val updatedFoolad = db.currentPriceDao().getPrice("فولاد")
+        assertNotNull(updatedFoolad)
+        assertEquals(500.0, updatedFoolad!!.price, 0.01)
+        assertEquals(PriceStatus.FRESH, updatedFoolad.status)
+
+        // بررسی حفظ قیمت دارایی عمومی با برچسب STALE و پیام خطای استاندارد
+        val preservedGeneric = db.currentPriceDao().getPrice("سهام")
+        assertNotNull(preservedGeneric)
+        assertEquals(320.0, preservedGeneric!!.price, 0.01)
+        assertEquals(PriceStatus.STALE, preservedGeneric.status)
+        assertEquals(StockInstrumentMapper.SYMBOL_REQUIRED_LABEL, preservedGeneric.errorMessage)
+
+        // بررسی گزارش تجمیعی بروزرسانی دسته‌ای
+        assertTrue("Report must indicate updated count >= 1", report.updatedCount >= 1)
+        assertTrue("Stale count must be >= 1", report.staleCount >= 1)
+        assertTrue("Portfolio recalculation must succeed", report.portfolioRecalculationSuccess)
+    }
+
+    /**
+     * ۱۹. بررسی ترکیب سبد در حالت ارزش صفر یا بدون معامله (جلوگیری از تولید NaN یا Infinity)
+     */
+    @Test
+    fun testPortfolioCompositionZeroValueEmptyState() {
+        val emptyPortfolio = CalculationEngine.calculatePortfolio(
+            transactions = emptyList(),
+            prices = emptyList(),
+            settings = AppSettingsEntity()
+        )
+
+        assertEquals(0.0, emptyPortfolio.totalPortfolioValueToman, 0.001)
+        assertTrue(emptyPortfolio.holdings.isEmpty())
+
+        for ((_, pct) in emptyPortfolio.allocationByClass) {
+            assertFalse("Allocation percent must not be NaN", pct.isNaN())
+            assertFalse("Allocation percent must not be Infinite", pct.isInfinite())
+            assertEquals(0.0, pct, 0.001)
+        }
+    }
 }
+

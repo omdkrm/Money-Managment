@@ -1,6 +1,8 @@
 package ir.modiriatsarmaye.app.util
 
 import ir.modiriatsarmaye.app.data.market.AssetInstrumentMapper
+import ir.modiriatsarmaye.app.data.market.FundInstrumentMapper
+import ir.modiriatsarmaye.app.data.market.StockInstrumentMapper
 import ir.modiriatsarmaye.app.data.model.*
 import kotlin.math.pow
 
@@ -157,10 +159,27 @@ object CalculationEngine {
                 unit = unit
             )
 
+            val stockTicker = if (assetClass == AssetClass.STOCK) {
+                StockInstrumentMapper.resolveStockSymbol(assetSymbol, assetName)
+            } else null
+            val fundTicker = if (assetClass in setOf(AssetClass.EQUITY_FUND, AssetClass.FIXED_INCOME_FUND, AssetClass.GOLD_FUND)) {
+                FundInstrumentMapper.resolveFundSymbol(assetSymbol, assetName)
+            } else null
+
             val priceEntry = priceMap[assetName]
                 ?: priceMap[assetSymbol]
+                ?: (if (stockTicker != null) priceMap[stockTicker] else null)
+                ?: (if (fundTicker != null) priceMap[fundTicker] else null)
                 ?: (if (holdingInstrumentId != null) priceMap[holdingInstrumentId] else null)
                 ?: prices.firstOrNull { p ->
+                    (stockTicker != null && (
+                        p.assetSymbolOrName.equals(stockTicker, ignoreCase = true) ||
+                        p.instrumentId.equals(stockTicker, ignoreCase = true)
+                    )) ||
+                    (fundTicker != null && (
+                        p.assetSymbolOrName.equals(fundTicker, ignoreCase = true) ||
+                        p.instrumentId.equals(fundTicker, ignoreCase = true)
+                    )) ||
                     (holdingInstrumentId != null && p.instrumentId.isNotBlank() && p.instrumentId.equals(holdingInstrumentId, ignoreCase = true)) ||
                     (holdingInstrumentId != null && AssetInstrumentMapper.resolveInstrumentId(p.assetSymbolOrName, p.assetName, p.assetClass, p.unit) == holdingInstrumentId) ||
                     (p.assetClass == assetClass && (

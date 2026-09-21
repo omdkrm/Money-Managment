@@ -170,6 +170,7 @@ fun PortfolioScreen(
                 StockDiagnosticCard(
                     diagnostics = lastReport.stockDiagnostics,
                     pipelineDiagnostic = lastReport.stockPipelineDiagnostic,
+                    bulkSummaryFa = lastReport.bulkUpdateSummaryFa,
                     onUpdateAllStocks = onUpdateAllStocks,
                     onUpdateIndividualStock = onUpdateIndividualStock
                 )

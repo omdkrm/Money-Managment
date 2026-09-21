@@ -16,7 +16,11 @@ data class MarketUpdateReport(
     val fundDiagnostics: List<StrategyDiagnostic> = emptyList(),
     val pipelineDiagnostic: SyncPipelineDiagnostic? = null,
     val stockPipelineDiagnostic: SyncPipelineDiagnostic? = null,
-    val allDiagnostics: List<StrategyDiagnostic> = emptyList()
+    val allDiagnostics: List<StrategyDiagnostic> = emptyList(),
+    val staleCount: Int = 0,
+    val portfolioRecalculationSuccess: Boolean = false,
+    val uiRefreshSuccess: Boolean = false,
+    val bulkUpdateSummaryFa: String = ""
 )
 
 /**

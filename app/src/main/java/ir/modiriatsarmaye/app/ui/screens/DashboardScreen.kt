@@ -251,12 +251,15 @@ fun DashboardScreen(
             }
         }
 
-        // ۵. نوار تخصیص دارایی‌ها (Asset Allocation Breakdown)
+        // ۵. نوار ترکیب سبد دارایی‌ها (Portfolio Composition / Asset Allocation)
         item {
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("portfolio_composition_card"),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -269,29 +272,76 @@ fun DashboardScreen(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        TextButton(onClick = onNavigateToPortfolio) {
+                        TextButton(
+                            onClick = onNavigateToPortfolio,
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("view_all_holdings_btn")
+                        ) {
                             Text("مشاهده همه دارایی‌ها")
                         }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // میله گرافیکی تخصیص دارایی
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(14.dp)
-                            .clip(RoundedCornerShape(7.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        summary.allocationByClass.forEach { (assetClass, pct) ->
-                            if (pct > 0.5) {
+                    val hasPortfolioValue = summary.totalPortfolioValueToman > 0.0 && summary.holdings.isNotEmpty()
+                    val validAllocations = summary.allocationByClass.entries
+                        .filter { (_, pct) -> !pct.isNaN() && !pct.isInfinite() && pct > 0.05 }
+                        .sortedByDescending { it.value }
+
+                    if (!hasPortfolioValue || validAllocations.isEmpty()) {
+                        // حالت خالی شفاف و کاربرپسند بدون نمایش هرگونه NaN یا Infinity
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .testTag("composition_empty_state"),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PieChart,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Text(
+                                    text = "هنوز دارایی فعالی برای نمایش ترکیب سبد ثبت نشده است",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "با ثبت معاملات خرید، ترکیب درصدی دارایی‌ها در اینجا محاسبه و نمایش داده می‌شود.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        // میله گرافیکی چندبخشی تخصیص دارایی متناسب با درصدها
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(14.dp)
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            validAllocations.forEach { (assetClass, pct) ->
                                 val color = when (assetClass) {
                                     ir.modiriatsarmaye.app.data.model.AssetClass.GOLD, ir.modiriatsarmaye.app.data.model.AssetClass.GOLD_FUND -> GoldAccent
                                     ir.modiriatsarmaye.app.data.model.AssetClass.EQUITY_FUND, ir.modiriatsarmaye.app.data.model.AssetClass.STOCK -> EmeraldPrimary
                                     ir.modiriatsarmaye.app.data.model.AssetClass.FIXED_INCOME_FUND -> InfoBlue
-                                    ir.modiriatsarmaye.app.data.model.AssetClass.USD, ir.modiriatsarmaye.app.data.model.AssetClass.EUR -> Color(0xFF0D9488)
-                                    else -> Color(0xFF8B5CF6)
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.USD, ir.modiriatsarmaye.app.data.model.AssetClass.EUR, ir.modiriatsarmaye.app.data.model.AssetClass.AED -> Color(0xFF0D9488)
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.CASH, ir.modiriatsarmaye.app.data.model.AssetClass.DEPOSIT -> Color(0xFF8B5CF6)
+                                    else -> Color(0xFF6B7280)
                                 }
                                 Box(
                                     modifier = Modifier
@@ -301,28 +351,68 @@ fun DashboardScreen(
                                 )
                             }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
-                    // برچسب‌های درصدها
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        summary.allocationByClass.entries.take(4).forEach { (ac, pct) ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
+                        // فهرست عمودی خوانا و تفکیک‌شده برای راهنمای ترکیب سبد دارایی‌ها با رعایت استانداردهای دسترس‌پذیری
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("composition_legend_list"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            validAllocations.forEach { (ac, pct) ->
+                                val color = when (ac) {
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.GOLD, ir.modiriatsarmaye.app.data.model.AssetClass.GOLD_FUND -> GoldAccent
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.EQUITY_FUND, ir.modiriatsarmaye.app.data.model.AssetClass.STOCK -> EmeraldPrimary
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.FIXED_INCOME_FUND -> InfoBlue
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.USD, ir.modiriatsarmaye.app.data.model.AssetClass.EUR, ir.modiriatsarmaye.app.data.model.AssetClass.AED -> Color(0xFF0D9488)
+                                    ir.modiriatsarmaye.app.data.model.AssetClass.CASH, ir.modiriatsarmaye.app.data.model.AssetClass.DEPOSIT -> Color(0xFF8B5CF6)
+                                    else -> Color(0xFF6B7280)
+                                }
+                                Surface(
                                     modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "${ac.titleFa}: ${PersianUtils.formatNumber(pct, 1)}٪",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp)),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .background(color)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = ac.titleFa,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        Text(
+                                            text = "${PersianUtils.formatNumber(pct, 1)}٪",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = color
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

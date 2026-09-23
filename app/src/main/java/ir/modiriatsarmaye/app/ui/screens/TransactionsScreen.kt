@@ -22,6 +22,7 @@ import ir.modiriatsarmaye.app.ui.theme.*
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthUiState
 import ir.modiriatsarmaye.app.util.PersianUtils
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TransactionsScreen(
     uiState: WealthUiState,
@@ -116,50 +117,89 @@ fun TransactionsScreen(
                 Text(
                     text = "فیلتر دسته دارایی:",
                     style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("filter_row_asset_classes")
                 ) {
                     item {
                         FilterChip(
                             selected = uiState.selectedAssetClassFilter == null,
                             onClick = { onSelectClassFilter(null) },
-                            label = { Text("همه") }
+                            label = { Text("همه دسته‌ها") },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 44.dp)
+                                .testTag("filter_chip_class_all")
                         )
                     }
                     items(AssetClass.entries) { ac ->
                         FilterChip(
                             selected = uiState.selectedAssetClassFilter == ac,
                             onClick = { onSelectClassFilter(if (uiState.selectedAssetClassFilter == ac) null else ac) },
-                            label = { Text(ac.titleFa) }
+                            label = { Text(ac.titleFa) },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 44.dp)
+                                .testTag("filter_chip_class_${ac.name}")
                         )
                     }
                 }
             }
         }
 
-        // ردیف فیلتر نوع عملیات
+        // بخش فیلتر نوع عملیات تراکنش (FlowRow ریسپانسیو و خوانا در RTL بدون هیچ‌گونه فشردگی یا شکست متن)
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = uiState.selectedActionFilter == null,
-                    onClick = { onSelectActionFilter(null) },
-                    label = { Text("همه عملیات‌ها") },
-                    modifier = Modifier.weight(1f)
+            Column {
+                Text(
+                    text = "فیلتر نوع عملیات:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                TransactionAction.entries.take(3).forEach { act ->
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("filter_flowrow_transaction_actions"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     FilterChip(
-                        selected = uiState.selectedActionFilter == act,
-                        onClick = { onSelectActionFilter(if (uiState.selectedActionFilter == act) null else act) },
-                        label = { Text(act.titleFa) },
-                        modifier = Modifier.weight(1f)
+                        selected = uiState.selectedActionFilter == null,
+                        onClick = { onSelectActionFilter(null) },
+                        label = {
+                            Text(
+                                text = "همه عملیات",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (uiState.selectedActionFilter == null) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 44.dp)
+                            .testTag("filter_chip_action_all")
                     )
+
+                    TransactionAction.entries.forEach { act ->
+                        val isSelected = uiState.selectedActionFilter == act
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { onSelectActionFilter(if (isSelected) null else act) },
+                            label = {
+                                Text(
+                                    text = act.titleFa,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 44.dp)
+                                .testTag("filter_chip_action_${act.name}")
+                        )
+                    }
                 }
             }
         }

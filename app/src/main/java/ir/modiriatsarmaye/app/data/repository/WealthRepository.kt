@@ -1003,10 +1003,11 @@ class WealthRepository(
     /**
      * اتصال حساب Google جهت پشتیبان‌گیری ابری
      */
-    suspend fun connectGoogleAccount(email: String, displayName: String): ValidationResult {
+    suspend fun connectGoogleAccount(email: String, displayName: String, accessToken: String? = null): ValidationResult {
         if (email.isBlank() || !email.contains("@")) {
             return ValidationResult.Error("آدرس ایمیل گوگل نامعتبر است.")
         }
+        driveBackupManager?.saveOAuthCredentials(email, displayName, accessToken)
         val currentSettings = getSettings()
         val updated = currentSettings.copy(
             googleAccountEmail = email.trim(),
@@ -1036,7 +1037,7 @@ class WealthRepository(
     suspend fun performGoogleDriveBackup(): Result<DriveBackupInfo> {
         val manager = driveBackupManager ?: return Result.failure(Exception("مدیریت Google Drive در دسترس نیست."))
         val settings = getSettings()
-        val email = settings.googleAccountEmail ?: return Result.failure(Exception("حساب Google متصل نیست."))
+        val email = settings.googleAccountEmail ?: return Result.failure(Exception("برای پشتیبانگیری ابری ابتدا حساب Google را متصل کنید."))
 
         val backupJson = exportBackupJson()
         val backupResult = manager.uploadBackupToDrive(backupJson, email)
@@ -1061,22 +1062,22 @@ class WealthRepository(
     suspend fun fetchGoogleDriveBackup(): Result<DriveBackupInfo> {
         val manager = driveBackupManager ?: return Result.failure(Exception("مدیریت Google Drive در دسترس نیست."))
         val settings = getSettings()
-        val email = settings.googleAccountEmail ?: return Result.failure(Exception("حساب Google متصل نیست."))
+        val email = settings.googleAccountEmail ?: return Result.failure(Exception("برای پشتیبانگیری ابری ابتدا حساب Google را متصل کنید."))
 
         return manager.downloadBackupFromDrive(email)
     }
 
     /**
-     * بازیابی اطلاعات از Google Drive با اعتبارسنجی
+     * بازیابی اطلاعات از Google Drive با اعتبارسنجی و انتخاب حالت جایگزینی یا ادغام
      */
-    suspend fun restoreFromGoogleDrive(): ValidationResult {
+    suspend fun restoreFromGoogleDrive(replaceExisting: Boolean = true): ValidationResult {
         val fetchResult = fetchGoogleDriveBackup()
         if (fetchResult.isFailure) {
             return ValidationResult.Error(fetchResult.exceptionOrNull()?.message ?: "خطا در دریافت پشتیبان Google Drive")
         }
 
         val info = fetchResult.getOrThrow()
-        return restoreBackupJson(info.rawJson)
+        return restoreBackupJson(info.rawJson, replaceExisting = replaceExisting)
     }
 
     /**

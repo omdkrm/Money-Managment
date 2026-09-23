@@ -144,13 +144,28 @@ fun WealthAppContent(
         )
     }
 
-    // بررسی بروزرسانی خودکار در هنگام باز شدن برنامه
+    // بررسی بروزرسانی خودکار بر اساس زمان‌بندی انتخابی کاربر و بهینه‌سازی مصرف باتری و شبکه
     LaunchedEffect(Unit) {
         val freq = uiState.settings.priceUpdateFrequency
-        if (freq == ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.ON_APP_OPEN ||
-            freq == ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.ON_CONNECTIVITY ||
-            freq == ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.DAILY
-        ) {
+        val lastUpdate = uiState.settings.lastPriceUpdateTimestamp
+        val now = System.currentTimeMillis()
+
+        val shouldUpdate = when (freq) {
+            ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.MANUAL_ONLY -> false
+            ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.ON_APP_OPEN -> {
+                // حداقل فاصله ۱۵ دقیقه بین دو بروزرسانی متوالی در زمان باز شدن برنامه
+                now - lastUpdate > 15 * 60 * 1000L
+            }
+            ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.DAILY -> {
+                // حداقل فاصله ۲۴ ساعت بین دو بروزرسانی روزانه
+                now - lastUpdate > 24 * 60 * 60 * 1000L
+            }
+            ir.modiriatsarmaye.app.data.model.PriceUpdateFrequency.ON_CONNECTIVITY -> {
+                now - lastUpdate > 30 * 60 * 1000L
+            }
+        }
+
+        if (shouldUpdate) {
             viewModel.syncMarketPrices(forceRefresh = false)
         }
     }
@@ -325,8 +340,8 @@ fun WealthAppContent(
                         onExportBackup = {
                             viewModel.exportBackupJson()
                         },
-                        onRestoreBackup = { json ->
-                            viewModel.restoreBackupJson(json) { _, _ -> }
+                        onRestoreBackup = { json, replaceExisting ->
+                            viewModel.restoreBackupJson(json, replaceExisting = replaceExisting) { _, _ -> }
                         },
                         onResetDatabase = {
                             viewModel.resetToInitialData()
@@ -346,8 +361,8 @@ fun WealthAppContent(
                         onGetGoogleDriveBackupPreview = { onResult ->
                             viewModel.getGoogleDriveBackupPreview(onResult)
                         },
-                        onRestoreFromGoogleDrive = {
-                            viewModel.restoreFromGoogleDrive { _, _ -> }
+                        onRestoreFromGoogleDrive = { replaceExisting ->
+                            viewModel.restoreFromGoogleDrive(replaceExisting = replaceExisting) { _, _ -> }
                         }
                     )
                 }

@@ -16,8 +16,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ir.modiriatsarmaye.app.data.model.*
+import ir.modiriatsarmaye.app.ui.components.PersianDatePickerDialog
 import ir.modiriatsarmaye.app.ui.components.StatusBadge
 import ir.modiriatsarmaye.app.ui.theme.ProfitGreen
+import ir.modiriatsarmaye.app.util.JalaliDate
 import ir.modiriatsarmaye.app.util.PersianUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -27,7 +29,18 @@ fun AddTransactionSheet(
     onDismiss: () -> Unit,
     onSave: (TransactionEntity) -> Unit
 ) {
-    var datePersian by remember { mutableStateOf(initialTransaction?.datePersian ?: PersianUtils.getCurrentPersianDate()) }
+    val initialJalali = remember(initialTransaction) {
+        if (initialTransaction != null) {
+            JalaliDate.parseOrNull(initialTransaction.datePersian)
+                ?: JalaliDate.fromEpochMillis(initialTransaction.timestamp)
+        } else {
+            JalaliDate.now()
+        }
+    }
+    var selectedJalaliDate by remember { mutableStateOf(initialJalali) }
+    var datePersian by remember { mutableStateOf(selectedJalaliDate.displayString) }
+    var showDatePickerDialog by remember { mutableStateOf(false) }
+
     var selectedAssetClass by remember { mutableStateOf(initialTransaction?.assetClass ?: AssetClass.GOLD) }
     var assetName by remember { mutableStateOf(initialTransaction?.assetName ?: "") }
     var assetSymbol by remember { mutableStateOf(initialTransaction?.assetSymbol ?: "") }
@@ -414,6 +427,17 @@ fun AddTransactionSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
+            if (showDatePickerDialog) {
+                PersianDatePickerDialog(
+                    initialDate = selectedJalaliDate,
+                    onDismissRequest = { showDatePickerDialog = false },
+                    onDateSelected = { picked ->
+                        selectedJalaliDate = picked
+                        datePersian = picked.displayString
+                    }
+                )
+            }
+
             // ۷. تاریخ، کارگزاری و یادداشت
             Text(
                 text = "۷. تاریخ، منبع و توضیحات",
@@ -426,13 +450,40 @@ fun AddTransactionSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                OutlinedTextField(
-                    value = datePersian,
-                    onValueChange = { datePersian = it },
-                    label = { Text("تاریخ تراکنش *") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { showDatePickerDialog = true }
+                ) {
+                    OutlinedTextField(
+                        value = datePersian,
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = false,
+                        label = { Text("تاریخ تراکنش (شمسی) *") },
+                        trailingIcon = {
+                            IconButton(onClick = { showDatePickerDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.DateRange,
+                                    contentDescription = "انتخاب تاریخ از تقویم شمسی",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline,
+                            disabledLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            disabledTrailingIconColor = MaterialTheme.colorScheme.primary,
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("transaction_date_picker_trigger")
+                    )
+                }
 
                 OutlinedTextField(
                     value = brokerOrSource,
@@ -586,10 +637,19 @@ fun AddTransactionSheet(
 
                     val parsedPrice = unitPriceText.toDoubleOrNull()
 
+                    val canonicalTimestamp = if (initialTransaction != null &&
+                        (initialTransaction.datePersian == selectedJalaliDate.canonicalString ||
+                         initialTransaction.datePersian == selectedJalaliDate.displayString)
+                    ) {
+                        initialTransaction.timestamp
+                    } else {
+                        selectedJalaliDate.toCanonicalEpochMillis()
+                    }
+
                     val tx = TransactionEntity(
                         id = initialTransaction?.id ?: 0L,
-                        datePersian = datePersian,
-                        timestamp = initialTransaction?.timestamp ?: System.currentTimeMillis(),
+                        datePersian = selectedJalaliDate.canonicalString,
+                        timestamp = canonicalTimestamp,
                         assetClass = selectedAssetClass,
                         assetName = assetName.trim(),
                         assetSymbol = assetSymbol.trim(),

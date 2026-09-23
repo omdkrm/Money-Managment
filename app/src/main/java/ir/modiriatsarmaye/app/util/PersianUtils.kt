@@ -120,16 +120,19 @@ object PersianUtils {
      */
     fun formatTimestampToPersian(timestamp: Long?): String {
         if (timestamp == null || timestamp <= 0L) return "نامشخص"
-        val sdf = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
-        val formatted = sdf.format(java.util.Date(timestamp))
-        return toPersianDigits(formatted)
+        return try {
+            val jd = JalaliDate.fromEpochMillis(timestamp)
+            jd.displayString
+        } catch (e: Exception) {
+            "نامشخص"
+        }
     }
 
     /**
-     * تاریخ شمسی فعلی تقریبی برای ایجاد پیش‌فرض فرم‌ها
+     * تاریخ شمسی فعلی برای مقداردهی اولیه فرم‌ها
      */
     fun getCurrentPersianDate(): String {
-        return "۱۴۰۵/۰۱/۰۱"
+        return JalaliDate.now().displayString
     }
 
     fun getPersianYearMonths(year: Int = 1405): List<String> {

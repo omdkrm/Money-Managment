@@ -1,5 +1,7 @@
 package ir.modiriatsarmaye.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,10 +17,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ir.modiriatsarmaye.app.data.backup.BackupValidationReport
+import ir.modiriatsarmaye.app.data.backup.SafeBackupManager
 import ir.modiriatsarmaye.app.data.cloud.DriveBackupInfo
 import ir.modiriatsarmaye.app.data.model.*
 import ir.modiriatsarmaye.app.ui.components.ConfirmationDialog
@@ -26,31 +31,43 @@ import ir.modiriatsarmaye.app.ui.components.StatusBadge
 import ir.modiriatsarmaye.app.ui.theme.*
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthUiState
 import ir.modiriatsarmaye.app.util.PersianUtils
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun MoreScreen(
     uiState: WealthUiState,
     onSaveSettings: (AppSettingsEntity) -> Unit,
     onExportBackup: suspend () -> String,
-    onRestoreBackup: (String) -> Unit,
+    onRestoreBackup: (String, Boolean) -> Unit,
     onResetDatabase: () -> Unit,
     onSyncMarketPrices: () -> Unit,
     onConnectGoogleAccount: (String, String) -> Unit,
     onDisconnectGoogleAccount: () -> Unit,
     onPerformGoogleDriveBackup: () -> Unit,
     onGetGoogleDriveBackupPreview: ((DriveBackupInfo?) -> Unit) -> Unit,
-    onRestoreFromGoogleDrive: () -> Unit
+    onRestoreFromGoogleDrive: (Boolean) -> Unit
 ) {
+    val context = LocalContext.current
     val settings = uiState.settings
     val scope = rememberCoroutineScope()
 
-    var showBackupExportDialog by remember { mutableStateOf(false) }
-    var exportedJsonContent by remember { mutableStateOf("") }
-    var showRestoreDialog by remember { mutableStateOf(false) }
-    var restoreJsonInput by remember { mutableStateOf("") }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
     var showSettingsEditorDialog by remember { mutableStateOf(false) }
+
+    // بازخورد عملیات پشتیبان‌گیری فایلی
+    var fileOpSuccessMessage by remember { mutableStateOf<String?>(null) }
+    var fileOpErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    // وضعیت بازیابی فایل محلی SAF
+    var pendingFileRestoreJson by remember { mutableStateOf<String?>(null) }
+    var pendingFileRestoreReport by remember { mutableStateOf<BackupValidationReport?>(null) }
+    var showFileRestoreConfirmDialog by remember { mutableStateOf(false) }
 
     // Google Drive Dialogs
     var showGoogleConnectDialog by remember { mutableStateOf(false) }
@@ -60,6 +77,63 @@ fun MoreScreen(
     var showCloudRestoreConfirmDialog by remember { mutableStateOf(false) }
     var cloudBackupPreviewInfo by remember { mutableStateOf<DriveBackupInfo?>(null) }
     var isCheckingCloudBackup by remember { mutableStateOf(false) }
+
+    // ثبت لانچر ذخیره فایل در Storage Access Framework با نوع MIME application/json
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val jsonContent = onExportBackup()
+                    context.contentResolver.openOutputStream(uri)?.use { os ->
+                        os.write(jsonContent.toByteArray(Charsets.UTF_8))
+                    } ?: throw IOException("عدم دسترسی به مسیر فایل انتخابی جهت ذخیره‌سازی")
+                    withContext(Dispatchers.Main) {
+                        fileOpSuccessMessage = "پشتیبان با موفقیت در فایل ذخیره شد."
+                        fileOpErrorMessage = null
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        fileOpErrorMessage = "ذخیره فایل پشتیبان انجام نشد: ${e.localizedMessage ?: "خطای ناشناخته"}"
+                        fileOpSuccessMessage = null
+                    }
+                }
+            }
+        }
+    }
+
+    // ثبت لانچر انتخاب و بازخوانی فایل پشتیبان JSON از حافظه دستگاه
+    val openDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val jsonContent = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        inputStream.bufferedReader(Charsets.UTF_8).readText()
+                    } ?: throw IOException("امکان خواندن فایل انتخاب شده وجود ندارد.")
+
+                    val report = SafeBackupManager.validateAndParseBackup(jsonContent)
+                    withContext(Dispatchers.Main) {
+                        if (!report.isValid) {
+                            fileOpErrorMessage = report.errors.firstOrNull() ?: "فایل پشتیبان نامعتبر است."
+                            fileOpSuccessMessage = null
+                        } else {
+                            pendingFileRestoreJson = jsonContent
+                            pendingFileRestoreReport = report
+                            showFileRestoreConfirmDialog = true
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        fileOpErrorMessage = "خواندن فایل پشتیبان انجام نشد: ${e.localizedMessage ?: "خطای ناشناخته"}"
+                        fileOpSuccessMessage = null
+                    }
+                }
+            }
+        }
+    }
 
     // دیالوگ اتصال حساب Google
     if (showGoogleConnectDialog) {
@@ -121,7 +195,79 @@ fun MoreScreen(
         )
     }
 
-    // دیالوگ تأیید بازیابی از Google Drive با نمایش مشخصات نسخه پشتیبان
+    // دیالوگ تأیید بازیابی از فایل با نمایش مشخصات نسخه پشتیبان و انتخاب نحوه ادغام / جایگزینی
+    if (showFileRestoreConfirmDialog && pendingFileRestoreJson != null && pendingFileRestoreReport != null) {
+        val rep = pendingFileRestoreReport!!
+        AlertDialog(
+            onDismissRequest = { showFileRestoreConfirmDialog = false },
+            title = {
+                Text("تأیید بازیابی از فایل پشتیبان", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "مشخصات نسخه پشتیبان خوانده‌شده از فایل JSON:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("• تعداد تراکنش‌های معتبر: ${PersianUtils.formatNumber(rep.validTransactions.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
+                            Text("• تعداد قیمت‌های روز: ${PersianUtils.formatNumber(rep.validPrices.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
+                            Text("• اهداف مالی: ${PersianUtils.formatNumber(rep.validGoals.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
+                            Text("• بدهی‌ها و تعهدات: ${PersianUtils.formatNumber(rep.validLiabilities.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
+                            if (rep.skippedTransactionsCount > 0) {
+                                Text("• رکوردهای نامعتبر نادیده گرفته‌شده: ${PersianUtils.toPersianDigits(rep.skippedTransactionsCount.toString())}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "نحوه اعمال نسخه پشتیبان بر روی داده‌های فعلی را انتخاب نمایید:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val json = pendingFileRestoreJson!!
+                            onRestoreBackup(json, false) // Merge
+                            showFileRestoreConfirmDialog = false
+                            fileOpSuccessMessage = "پشتیبان با موفقیت با داده‌های موجود ادغام گردید."
+                        },
+                        modifier = Modifier.testTag("confirm_restore_merge_btn")
+                    ) {
+                        Text("ادغام با داده‌های موجود")
+                    }
+                    Button(
+                        onClick = {
+                            val json = pendingFileRestoreJson!!
+                            onRestoreBackup(json, true) // Replace
+                            showFileRestoreConfirmDialog = false
+                            fileOpSuccessMessage = "داده‌ها با موفقیت جایگزین شدند."
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.testTag("confirm_restore_replace_btn")
+                    ) {
+                        Text("جایگزینی کامل")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFileRestoreConfirmDialog = false }) { Text("انصراف") }
+            }
+        )
+    }
+
+    // دیالوگ تأیید بازیابی از Google Drive با نمایش مشخصات نسخه پشتیبان و انتخاب جایگزینی یا ادغام
     if (showCloudRestoreConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showCloudRestoreConfirmDialog = false },
@@ -144,6 +290,7 @@ fun MoreScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
+                                Text("• نام فایل: ${info.fileName}", style = MaterialTheme.typography.bodySmall)
                                 Text("• تعداد تراکنش‌ها: ${PersianUtils.formatNumber(info.transactionsCount.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
                                 Text("• تعداد اهداف مالی: ${PersianUtils.formatNumber(info.goalsCount.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
                                 Text("• تعداد بدهی‌ها: ${PersianUtils.formatNumber(info.liabilitiesCount.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
@@ -154,23 +301,35 @@ fun MoreScreen(
                     } else {
                         Text("در حال بررسی فایل پشتیبان...", style = MaterialTheme.typography.bodySmall)
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "توجه: با بازیابی، اطلاعات فعلی پایگاه داده با محتوای نسخه ابری جایگزین خواهد شد.",
+                        text = "نحوه اعمال نسخه ابری بر روی داده‌های فعلی را انتخاب فرمایید:",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
+                        fontWeight = FontWeight.Bold
                     )
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        onRestoreFromGoogleDrive()
-                        showCloudRestoreConfirmDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                ) {
-                    Text("تأیید و بازیابی اطلاعات")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            onRestoreFromGoogleDrive(false) // Merge
+                            showCloudRestoreConfirmDialog = false
+                        },
+                        modifier = Modifier.testTag("cloud_restore_merge_btn")
+                    ) {
+                        Text("ادغام با داده‌های فعلی")
+                    }
+                    Button(
+                        onClick = {
+                            onRestoreFromGoogleDrive(true) // Replace
+                            showCloudRestoreConfirmDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.testTag("cloud_restore_replace_btn")
+                    ) {
+                        Text("جایگزینی کامل")
+                    }
                 }
             },
             dismissButton = {
@@ -191,76 +350,6 @@ fun MoreScreen(
                 showDisconnectGoogleConfirm = false
             },
             onDismiss = { showDisconnectGoogleConfirm = false }
-        )
-    }
-
-    // دیالوگ خروجی فایل پشتیبان متنی
-    if (showBackupExportDialog) {
-        AlertDialog(
-            onDismissRequest = { showBackupExportDialog = false },
-            title = { Text("پشتیبان‌گیری محلی (JSON)", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "می‌توانید متن زیر را کپی کرده و به عنوان نسخه پشتیبان امن نزد خود نگه دارید:",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = exportedJsonContent,
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showBackupExportDialog = false }) {
-                    Text("بستن")
-                }
-            }
-        )
-    }
-
-    // دیالوگ بازیابی فایل پشتیبان متنی
-    if (showRestoreDialog) {
-        AlertDialog(
-            onDismissRequest = { showRestoreDialog = false },
-            title = { Text("بازیابی اطلاعات از فایل متنی", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "متن JSON پشتیبان را در کادر زیر جای‌گذاری کنید:",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = restoreJsonInput,
-                        onValueChange = { restoreJsonInput = it },
-                        placeholder = { Text("محتوای JSON پشتیبان...") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (restoreJsonInput.isNotBlank()) {
-                            onRestoreBackup(restoreJsonInput)
-                            showRestoreDialog = false
-                        }
-                    }
-                ) {
-                    Text("بازیابی اطلاعات")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestoreDialog = false }) { Text("انصراف") }
-            }
         )
     }
 
@@ -608,25 +697,63 @@ fun MoreScreen(
             }
         }
 
-        // بخش ۴: پشتیبان‌گیری محلی و بازنشانی داده‌ها
+        // بخش ۴: پشتیبان‌گیری محلی در فایل (آفلاین با استاندارد SAF)
         item {
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("local_backup_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "پشتیبان‌گیری محلی (آفلاین)",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.FolderZip, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "پشتیبان‌گیری محلی در فایل (آفلاین)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "امکان استخراج یا وارد کردن متن پشتیبان به صورت مستقیم و بدون نیاز به شبکه اینترنت.",
+                        text = "ذخیره یا بازخوانی فایل پشتیبان استاندارد JSON با سازگاری عقب‌رو مستقیماً در حافظه دستگاه بدون ارسال به سرور خارجی.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    if (fileOpSuccessMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ProfitGreen.copy(alpha = 0.15f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = fileOpSuccessMessage!!,
+                                color = ProfitGreen,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    if (fileOpErrorMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = fileOpErrorMessage!!,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
@@ -634,27 +761,36 @@ fun MoreScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedButton(
+                        Button(
                             onClick = {
-                                scope.launch {
-                                    exportedJsonContent = onExportBackup()
-                                    showBackupExportDialog = true
-                                }
+                                val timeFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US)
+                                val filename = "modiriat_sarmaye_backup_${timeFormat.format(Date())}.json"
+                                createDocumentLauncher.launch(filename)
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("export_file_backup_btn"),
+                            shape = RoundedCornerShape(10.dp)
                         ) {
                             Icon(imageVector = Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("خروجی متنی")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("ذخیره فایل پشتیبان")
                         }
 
                         OutlinedButton(
-                            onClick = { showRestoreDialog = true },
-                            modifier = Modifier.weight(1f)
+                            onClick = {
+                                openDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("restore_file_backup_btn"),
+                            shape = RoundedCornerShape(10.dp)
                         ) {
                             Icon(imageVector = Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("ورود متنی")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("بازیابی از فایل")
                         }
                     }
 
@@ -665,6 +801,71 @@ fun MoreScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("بازنشانی پایگاه داده به مقادیر پیش‌فرض اولیه", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        // بخش ۵: وضعیت عملکرد، پایگاه داده و اتصالات (Diagnostics & Health)
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("diagnostics_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.Analytics, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "وضعیت عملکرد و پایش سیستم",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        StatusBadge(text = "پایدار", color = ProfitGreen)
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "• پایگاه داده محلی (Room): ${PersianUtils.formatNumber(uiState.transactions.size.toDouble())} تراکنش • ${PersianUtils.formatNumber(uiState.portfolioSummary.holdings.size.toDouble())} دارایی فعال",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                text = "• اهداف و تعهدات: ${PersianUtils.formatNumber(uiState.goals.size.toDouble())} هدف مالی • ${PersianUtils.formatNumber(uiState.liabilities.size.toDouble())} تعهد بدهی",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            val cacheTimeStr = if (settings.lastPriceUpdateTimestamp > 0) PersianUtils.formatTimestampToPersian(settings.lastPriceUpdateTimestamp) else "ثبت نشده"
+                            Text(
+                                text = "• کش نرخ‌های بازار: بروزرسانی در $cacheTimeStr",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            val cloudStateStr = if (!settings.googleAccountEmail.isNullOrBlank()) "متصل (${settings.googleAccountEmail}) - بدون افشای کلیدها" else "غیرمتصل (امن و خصوصی)"
+                            Text(
+                                text = "• امنیت و پشتیبان ابری: $cloudStateStr",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (!settings.googleAccountEmail.isNullOrBlank()) ProfitGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "• بهینه‌سازی مصرف انرژی: فرکانس ${settings.priceUpdateFrequency.titleFa} (بدون پولینگ مداوم پس‌زمینه)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
             }

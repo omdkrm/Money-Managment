@@ -289,12 +289,13 @@ class WealthViewModel(
 
     fun restoreBackupJson(
         jsonString: String,
+        replaceExisting: Boolean = true,
         onComplete: (Boolean, String?) -> Unit
     ) {
         viewModelScope.launch {
-            when (val res = repository.restoreBackupJson(jsonString)) {
+            when (val res = repository.restoreBackupJson(jsonString, replaceExisting = replaceExisting)) {
                 is ValidationResult.Success -> {
-                    _userSuccessMessage.value = "بازیابی اطلاعات با موفقیت انجام شد."
+                    _userSuccessMessage.value = res.message
                     onComplete(true, null)
                 }
                 is ValidationResult.Error -> {
@@ -402,9 +403,9 @@ class WealthViewModel(
     /**
      * اتصال حساب Google
      */
-    fun connectGoogleAccount(email: String, displayName: String, onComplete: ((Boolean, String?) -> Unit)? = null) {
+    fun connectGoogleAccount(email: String, displayName: String, accessToken: String? = null, onComplete: ((Boolean, String?) -> Unit)? = null) {
         viewModelScope.launch {
-            when (val res = repository.connectGoogleAccount(email, displayName)) {
+            when (val res = repository.connectGoogleAccount(email, displayName, accessToken)) {
                 is ValidationResult.Success -> {
                     _cloudBackupStatus.value = CloudBackupStatus.IDLE
                     _userSuccessMessage.value = "حساب Google ($email) با موفقیت متصل گردید."
@@ -462,15 +463,15 @@ class WealthViewModel(
     }
 
     /**
-     * بازیابی از Google Drive پس از تأیید کاربر
+     * بازیابی از Google Drive پس از تأیید کاربر با انتخاب جایگزینی یا ادغام
      */
-    fun restoreFromGoogleDrive(onComplete: (Boolean, String?) -> Unit) {
+    fun restoreFromGoogleDrive(replaceExisting: Boolean = true, onComplete: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             _cloudBackupStatus.value = CloudBackupStatus.RESTORING
-            when (val res = repository.restoreFromGoogleDrive()) {
+            when (val res = repository.restoreFromGoogleDrive(replaceExisting = replaceExisting)) {
                 is ValidationResult.Success -> {
                     _cloudBackupStatus.value = CloudBackupStatus.IDLE
-                    _userSuccessMessage.value = "بازیابی اطلاعات از Google Drive با موفقیت انجام شد."
+                    _userSuccessMessage.value = res.message
                     onComplete(true, null)
                 }
                 is ValidationResult.Error -> {

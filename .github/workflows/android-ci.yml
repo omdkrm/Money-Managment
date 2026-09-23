@@ -1,14 +1,26 @@
+```yaml
 name: Android CI
 
 on:
   push:
-    branches: [ main, master, develop, 'feature/**', 'release/**' ]
+    branches:
+      - main
+      - master
+      - develop
+      - 'feature/**'
+      - 'release/**'
   pull_request:
-    branches: [ main, master, develop ]
+    branches:
+      - main
+      - master
+      - develop
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   validate-and-build:
@@ -17,7 +29,11 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      # مرحله ۱: دریافت کد منبع (Checkout)
+
+      # ==================================================
+      # 1. Checkout
+      # ==================================================
+
       - name: Checkout Repository
         id: step_checkout
         uses: actions/checkout@v4
@@ -25,159 +41,254 @@ jobs:
           fetch-depth: 0
 
       - name: Log Checkout Status
+        if: ${{ always() }}
         run: |
-          echo "Checkout: SUCCESS" >> $GITHUB_STEP_SUMMARY
-          echo "Repository checked out successfully at commit: ${{ github.sha }}"
+          if [ "${{ steps.step_checkout.outcome }}" = "success" ]; then
+            echo "Checkout: SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+            echo "Repository checked out successfully."
+          else
+            echo "Checkout: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      # مرحله ۲: اعتبارسنجی قطعی پکیج و شناسه برنامه (Package Name Validation)
+
+      # ==================================================
+      # 2. Package Name Validation
+      # ==================================================
+
       - name: Validate Package Name & Reject Placeholders
         id: step_pkg_validation
+        shell: bash
         run: |
+          set -euo pipefail
+
+          TARGET_PACKAGE="ir.modiriatsarmaye.app"
+
           echo "=================================================="
-          echo "اعتبارسنجی شناسه پکیج و ممانعت از بسته‌های ساختگی"
-          echo "Target Package: ir.modiriatsarmaye.app"
+          echo "Package validation"
+          echo "Target package: ${TARGET_PACKAGE}"
           echo "=================================================="
 
-          # بررسی namespace در app/build.gradle.kts
-          if ! grep -q 'namespace = "ir.modiriatsarmaye.app"' app/build.gradle.kts; then
-            echo "::error::خطا: namespace در app/build.gradle.kts باید دقیقاً ir.modiriatsarmaye.app باشد."
+          if [ ! -f "app/build.gradle.kts" ]; then
+            echo "::error::app/build.gradle.kts not found."
             exit 1
           fi
 
-          # بررسی applicationId در app/build.gradle.kts
-          if ! grep -q 'applicationId = "ir.modiriatsarmaye.app"' app/build.gradle.kts; then
-            echo "::error::خطا: applicationId در app/build.gradle.kts باید دقیقاً ir.modiriatsarmaye.app باشد."
+          # namespace
+          if ! grep -Fq 'namespace = "ir.modiriatsarmaye.app"' app/build.gradle.kts; then
+            echo "::error::namespace must be exactly ${TARGET_PACKAGE}"
             exit 1
           fi
 
-          # بررسی پکیج در فایل‌های کاتلین سورس اصلی
-          KOTLIN_WRONG_PKGS=$(grep -rn "^package " app/src/main/java/ | grep -v "package ir.modiriatsarmaye.app" || true)
-          if [ -n "$KOTLIN_WRONG_PKGS" ]; then
-            echo "::error::فایل‌های کاتلین با پکیج نامعتبر یافت شدند:"
-            echo "$KOTLIN_WRONG_PKGS"
+          # applicationId
+          if ! grep -Fq 'applicationId = "ir.modiriatsarmaye.app"' app/build.gradle.kts; then
+            echo "::error::applicationId must be exactly ${TARGET_PACKAGE}"
             exit 1
           fi
 
-          # رد صریح پکیج‌های ساختگی و پلیس‌هولدر
-          FORBIDDEN_PATTERNS=("com.example" "com.sample" "com.yourapp" "ir.sample")
+          # Kotlin source package declarations
+          if [ -d "app/src/main/java" ]; then
+            KOTLIN_WRONG_PKGS="$(
+              grep -RInE '^package[[:space:]]+' \
+                app/src/main/java \
+                --include='*.kt' \
+                --include='*.kts' \
+                | grep -vE "^.*:package[[:space:]]+ir\.modiriatsarmaye\.app([.].*)?$" \
+                || true
+            )"
+
+            if [ -n "$KOTLIN_WRONG_PKGS" ]; then
+              echo "::error::Invalid Kotlin package declarations found:"
+              echo "$KOTLIN_WRONG_PKGS"
+              exit 1
+            fi
+          fi
+
+          # Forbidden placeholder package names
+          FORBIDDEN_PATTERNS=(
+            "com.example"
+            "com.sample"
+            "com.yourapp"
+            "ir.sample"
+          )
+
           FOUND_FORBIDDEN=0
+
           for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
-            MATCHES=$(grep -rn --exclude-dir=".git" --exclude-dir="build" --exclude="*.md" "$pattern" app/src/main/ || true)
+            MATCHES="$(
+              grep -RInF \
+                --exclude-dir=".git" \
+                --exclude-dir="build" \
+                --exclude="*.md" \
+                --exclude="*.txt" \
+                "$pattern" \
+                app/src/main \
+                app/build.gradle.kts \
+                2>/dev/null \
+                || true
+            )"
+
             if [ -n "$MATCHES" ]; then
-              echo "::error::پکیج ساختگی غیرمجاز یافت شد: $pattern"
+              echo "::error::Forbidden placeholder package detected: ${pattern}"
               echo "$MATCHES"
               FOUND_FORBIDDEN=1
             fi
           done
 
-          if [ $FOUND_FORBIDDEN -ne 0 ]; then
-            echo "Package validation: FAILED" >> $GITHUB_STEP_SUMMARY
+          if [ "$FOUND_FORBIDDEN" -ne 0 ]; then
+            echo "Package validation: FAILED" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          echo "Package validation: SUCCESS (ir.modiriatsarmaye.app verified)" >> $GITHUB_STEP_SUMMARY
-          echo "تأیید پکیج: موفقیت‌آمیز"
+          echo "Package validation: SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verified package: ${TARGET_PACKAGE}"
 
-      # مرحله ۳: اعتبارسنجی امنیتی Gradle Wrapper
+
+      # ==================================================
+      # 3. Gradle Wrapper Validation
+      # ==================================================
+
       - name: Validate Gradle Wrapper Integrity
         id: step_wrapper_validation
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
-      # مرحله ۴: پیکربندی جاوا متناسب با پروژه (Java 21 LTS)
-      - name: Setup Java JDK (21 Temurin)
+
+      # ==================================================
+      # 4. Java 21
+      # ==================================================
+
+      - name: Setup Java JDK 21
         id: step_java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
       - name: Log Java Status
+        if: ${{ always() }}
         run: |
-          java -version
-          echo "Java setup: SUCCESS (Temurin JDK 21)" >> $GITHUB_STEP_SUMMARY
+          java -version 2>&1
 
-      # مرحله ۵: تنظیم و کش هوشمند Gradle
+          if [ "${{ steps.step_java.outcome }}" = "success" ]; then
+            echo "Java setup: SUCCESS (Temurin JDK 21)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Java setup: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+
+      # ==================================================
+      # 5. Gradle Setup + Cache
+      # ==================================================
+
       - name: Setup Gradle
         id: step_gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
       - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew
+        run: chmod +x ./gradlew
+
+      - name: Verify Gradle Wrapper
+        run: ./gradlew --version
 
       - name: Log Gradle Setup Status
-        run: echo "Gradle setup: SUCCESS" >> $GITHUB_STEP_SUMMARY
-
-      # مرحله ۶: اجرای آزمون‌های واحد و آزمون‌های رگرسیون (Unit & Regression Tests)
-      - name: Run Unit & Regression Tests
-        id: step_unit_tests
+        if: ${{ always() }}
         run: |
-          echo "=================================================="
-          echo "اجرای مجموعه آزمون‌های پروژه شامل:"
-          echo "- GoldPriceSyncTest"
-          echo "- StockPriceSyncTest"
-          echo "- FundPriceSyncTest"
-          echo "- SafeBackupRestoreTest"
-          echo "- WealthCalculationTest"
-          echo "- JalaliDateAndCloudBackupTest"
-          echo "- WealthAppRobolectricTest"
-          echo "=================================================="
-          ./gradlew testDebugUnitTest --continue --stacktrace
-
-      - name: Log Tests Status
-        if: always()
-        run: |
-          if [ "${{ steps.step_unit_tests.outcome }}" == "success" ]; then
-            echo "Unit tests: SUCCESS" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.step_gradle.outcome }}" = "success" ]; then
+            echo "Gradle setup: SUCCESS" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Unit tests: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "Gradle setup: FAILED" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # مرحله ۷: اجرای آنالیز ایستای Android Lint
+
+      # ==================================================
+      # 6. Unit + Regression Tests
+      # ==================================================
+
+      - name: Run Unit & Regression Tests
+        id: step_unit_tests
+        shell: bash
+        run: |
+          set -o pipefail
+
+          echo "=================================================="
+          echo "Running Android unit and regression tests"
+          echo "=================================================="
+
+          ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Log Tests Status
+        if: ${{ always() }}
+        run: |
+          if [ "${{ steps.step_unit_tests.outcome }}" = "success" ]; then
+            echo "Unit & Regression Tests: SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Unit & Regression Tests: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+
+      # ==================================================
+      # 7. Android Lint
+      # ==================================================
+
       - name: Run Android Lint
         id: step_lint
         run: ./gradlew lintDebug --stacktrace
-        continue-on-error: true
 
       - name: Log Lint Status
-        if: always()
+        if: ${{ always() }}
         run: |
-          if [ "${{ steps.step_lint.outcome }}" == "success" ]; then
-            echo "Lint: SUCCESS" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.step_lint.outcome }}" = "success" ]; then
+            echo "Android Lint: SUCCESS" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Lint: WARNINGS_OR_FAILED (Check report)" >> $GITHUB_STEP_SUMMARY
+            echo "Android Lint: FAILED" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # مرحله ۸: ساخت فایل تست Debug APK جهت اعتبارسنجی CI (نه برای انتشار)
+
+      # ==================================================
+      # 8. Debug APK
+      # ==================================================
+
       - name: Build Debug APK for CI Verification
         id: step_build_debug
         run: |
-          echo "ساخت فایل Debug APK صرفاً جهت اعتبارسنجی CI..."
+          echo "Building Debug APK for CI verification only."
+          echo "This artifact is NOT for store release."
+
           ./gradlew assembleDebug --stacktrace
 
       - name: Log Debug Build Status
-        if: always()
+        if: ${{ always() }}
         run: |
-          if [ "${{ steps.step_build_debug.outcome }}" == "success" ]; then
-            echo "Debug build: SUCCESS" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.step_build_debug.outcome }}" = "success" ]; then
+            echo "Debug Build: SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+            echo "CI TEST BUILD — NOT FOR STORE RELEASE" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Debug build: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "Debug Build: FAILED" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # مرحله ۹: بارگذاری گزارش‌های تست واحد و رگرسیون
+
+      # ==================================================
+      # 9. Upload Unit Test Reports
+      # ==================================================
+
       - name: Upload Unit Test Reports
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-reports
-          path: app/build/reports/tests/testDebugUnitTest/
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
           retention-days: 14
 
-      # مرحله ۱۰: بارگذاری گزارش آنالیز Lint
+
+      # ==================================================
+      # 10. Upload Lint Reports
+      # ==================================================
+
       - name: Upload Lint Reports
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: lint-reports
@@ -188,9 +299,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # مرحله ۱۱: بارگذاری خروجی Debug به عنوان نسخه صرفاً تست CI (نه برای انتشار در فروشگاه)
-      - name: Upload CI Test Debug APK (CI TEST ONLY)
-        if: steps.step_build_debug.outcome == 'success'
+
+      # ==================================================
+      # 11. Upload Debug APK
+      # ==================================================
+
+      - name: Upload CI Test Debug APK
+        if: ${{ steps.step_build_debug.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: CI-TEST-BUILD-NOT-FOR-STORE-RELEASE-app-debug
@@ -198,18 +313,69 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # مرحله ۱۲: جمع‌بندی وضعیت نهایی فرآیند CI
+
+      # ==================================================
+      # 12. Final CI Summary
+      # ==================================================
+
       - name: Report Final CI Summary
-        if: always()
+        if: ${{ always() }}
+        shell: bash
         run: |
-          echo "### خلاصه وضعیت فرآیند ارزیابی مداوم (CI Status)" >> $GITHUB_STEP_SUMMARY
-          echo "| مرحله | وضعیت |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Checkout | ${{ steps.step_checkout.outcome == 'success' && '✅ SUCCESS' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Package Validation (ir.modiriatsarmaye.app) | ${{ steps.step_pkg_validation.outcome == 'success' && '✅ SUCCESS' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Java Setup (Temurin 21) | ${{ steps.step_java.outcome == 'success' && '✅ SUCCESS' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Gradle Setup | ${{ steps.step_gradle.outcome == 'success' && '✅ SUCCESS' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit & Regression Tests | ${{ steps.step_unit_tests.outcome == 'success' && '✅ SUCCESS' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Android Lint | ${{ steps.step_lint.outcome == 'success' && '✅ SUCCESS' || '⚠️ WARNING' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Debug Build (CI Test) | ${{ steps.step_build_debug.outcome == 'success' && '✅ SUCCESS' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Test & Lint Reports | Uploaded as Artifacts |" >> $GITHUB_STEP_SUMMARY
+          echo "### Android CI Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Stage | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.step_checkout.outcome }}" = "success" ]; then
+            echo "| Checkout | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Checkout | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_pkg_validation.outcome }}" = "success" ]; then
+            echo "| Package Validation | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Package Validation | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_wrapper_validation.outcome }}" = "success" ]; then
+            echo "| Gradle Wrapper Validation | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Gradle Wrapper Validation | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_java.outcome }}" = "success" ]; then
+            echo "| Java 21 | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Java 21 | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_gradle.outcome }}" = "success" ]; then
+            echo "| Gradle Setup | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Gradle Setup | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_unit_tests.outcome }}" = "success" ]; then
+            echo "| Unit & Regression Tests | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Unit & Regression Tests | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_lint.outcome }}" = "success" ]; then
+            echo "| Android Lint | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Android Lint | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ steps.step_build_debug.outcome }}" = "success" ]; then
+            echo "| Debug CI Build | SUCCESS |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Debug CI Build | FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Debug APK is CI/test-only and must NOT be used for store release.**" >> "$GITHUB_STEP_SUMMARY"
+```

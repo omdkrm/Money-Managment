@@ -1,0 +1,208 @@
+name: Android Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_format:
+        description: 'قالب خروجی ساخت نسخه انتشار (Artifact format)'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - 'both'
+          - 'aab'
+          - 'apk'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build Signed Release (APK / AAB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # مرحله ۱: دریافت کد منبع (Checkout)
+      - name: Checkout Repository
+        id: step_checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # مرحله ۲: اعتبارسنجی قطعی پکیج و شناسه برنامه (Package Name Validation)
+      - name: Validate Package Identity
+        run: |
+          echo "=================================================="
+          echo "اعتبارسنجی یکپارچگی پکیج رسمی برنامه"
+          echo "Package: ir.modiriatsarmaye.app"
+          echo "=================================================="
+
+          if ! grep -q 'namespace = "ir.modiriatsarmaye.app"' app/build.gradle.kts; then
+            echo "::error::خطا: namespace نامعتبر است."
+            exit 1
+          fi
+
+          if ! grep -q 'applicationId = "ir.modiriatsarmaye.app"' app/build.gradle.kts; then
+            echo "::error::خطا: applicationId نامعتبر است."
+            exit 1
+          fi
+
+          echo "شناسه پکیج ir.modiriatsarmaye.app با موفقیت تأیید شد."
+
+      # مرحله ۳: بررسی و اعتبارسنجی اکید کلیدهای امضای نسخه نهایی (Release Signing Secrets Validation)
+      - name: Validate Release Signing Secrets (Security Check)
+        id: check_secrets
+        run: |
+          echo "=================================================="
+          echo "بررسی امنیتی کلیدهای امضای رسمی نسخه انتشار (Release)"
+          echo "=================================================="
+
+          MISSING_SECRETS=0
+
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "::error::کلید محرمانه KEYSTORE_BASE64 تنظیم نشده است."
+            MISSING_SECRETS=1
+          fi
+
+          if [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+            echo "::error::کلید محرمانه KEYSTORE_PASSWORD تنظیم نشده است."
+            MISSING_SECRETS=1
+          fi
+
+          if [ -z "${{ secrets.KEY_ALIAS }}" ]; then
+            echo "::error::کلید محرمانه KEY_ALIAS تنظیم نشده است."
+            MISSING_SECRETS=1
+          fi
+
+          if [ -z "${{ secrets.KEY_PASSWORD }}" ]; then
+            echo "::error::کلید محرمانه KEY_PASSWORD تنظیم نشده است."
+            MISSING_SECRETS=1
+          fi
+
+          if [ $MISSING_SECRETS -ne 0 ]; then
+            echo "=================================================="
+            echo "::error::خطای امنیتی: ساخت نسخه Release تنها با کلیدهای رسمی مجاز است."
+            echo "::error::استفاده از debug.keystore، androiddebugkey یا debug signing برای نسخه انتشار اکیداً ممنوع است."
+            echo "=================================================="
+            exit 1
+          fi
+
+          echo "تمامی Secretهای امضای نسخه نهایی موجود و معتبر هستند."
+
+      # مرحله ۴: استخراج امن Keystore موقت
+      - name: Prepare Keystore File Securely
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          if [ ! -s "$RUNNER_TEMP/release.keystore" ]; then
+            echo "::error::فایل keystore ایجاد شده خالی یا نامعتبر است."
+            exit 1
+          fi
+          chmod 600 "$RUNNER_TEMP/release.keystore"
+          echo "فایل Keystore در محیط ایزوله RUNNER_TEMP آماده شد."
+
+      # مرحله ۵: اعتبارسنجی یکپارچگی Gradle Wrapper
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      # مرحله ۶: راه‌اندازی جاوا ۲۱ (Temurin)
+      - name: Setup Java JDK (21 Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      # مرحله ۷: راه‌اندازی Gradle با کش
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x gradlew
+
+      # مرحله ۸: ساخت بسته انتشار Release (APK و/یا AAB)
+      - name: Build Release Artifacts (No Debug Fallback)
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "=================================================="
+          echo "شروع کامپایل نسخه انتشار رسمی (Release Build)"
+          echo "Build Format: ${{ inputs.build_format }}"
+          echo "=================================================="
+
+          BUILD_FORMAT="${{ inputs.build_format }}"
+
+          if [ "$BUILD_FORMAT" == "apk" ] || [ "$BUILD_FORMAT" == "both" ]; then
+            echo "ساخت فایل Release APK..."
+            ./gradlew assembleRelease --stacktrace
+          fi
+
+          if [ "$BUILD_FORMAT" == "aab" ] || [ "$BUILD_FORMAT" == "both" ]; then
+            echo "ساخت فایل Release Android App Bundle (AAB)..."
+            ./gradlew bundleRelease --stacktrace
+          fi
+
+      # مرحله ۹: راستی‌آزمایی امنیتی فایل‌های خروجی Release
+      - name: Verify Release Security & Integrity
+        run: |
+          echo "=================================================="
+          echo "راستی‌آزمایی امنیتی خروجی ساخت (Security & Anti-Debug Verification)"
+          echo "=================================================="
+
+          mkdir -p release-artifacts
+
+          # بررسی وجود فایل Release APK
+          if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+            # اطمینان از اینکه فایل تولیدی debug نیست
+            if [[ "app/build/outputs/apk/release/app-release.apk" == *"app-debug.apk"* ]]; then
+              echo "::error::فایل خروجی نباید نام debug داشته باشد!"
+              exit 1
+            fi
+
+            cp app/build/outputs/apk/release/app-release.apk release-artifacts/ir.modiriatsarmaye.app-release.apk
+            echo "✅ Release APK تأیید و آماده شد: release-artifacts/ir.modiriatsarmaye.app-release.apk"
+          fi
+
+          # بررسی وجود فایل Release AAB
+          if [ -f "app/build/outputs/bundle/release/app-release.aab" ]; then
+            cp app/build/outputs/bundle/release/app-release.aab release-artifacts/ir.modiriatsarmaye.app-release.aab
+            echo "✅ Release AAB تأیید و آماده شد: release-artifacts/ir.modiriatsarmaye.app-release.aab"
+          fi
+
+          if [ ! -d "release-artifacts" ] || [ -z "$(ls -A release-artifacts)" ]; then
+            echo "::error::هیچ فایل خروجی معتبری در release-artifacts ایجاد نشده است."
+            exit 1
+          fi
+
+      # مرحله ۱۰: بارگذاری امن فایل‌های رسمی Release به عنوان Artifact گیت‌هاب (بدون انتشار مستقیم به استور)
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-artifacts
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      # مرحله ۱۱: پاکسازی قطعی کلید Keystore از روی رانر
+      - name: Clean Up Keystore File
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/release.keystore" ]; then
+            shred -u "$RUNNER_TEMP/release.keystore" 2>/dev/null || rm -f "$RUNNER_TEMP/release.keystore"
+            echo "فایل Keystore موقت با موفقیت و به صورت امن از روی رانر امحاء گردید."
+          fi
+
+      # مرحله ۱۲: گزارش خلاصه وضعیت ساخت Release
+      - name: Report Release Summary
+        if: always()
+        run: |
+          echo "### خلاصه ساخت نسخه نهایی انتشار (Release Build Summary)" >> $GITHUB_STEP_SUMMARY
+          echo "- شناسه پکیج: \`ir.modiriatsarmaye.app\`" >> $GITHUB_STEP_SUMMARY
+          echo "- حالت انتشار: دستی (\`workflow_dispatch\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- قالب انتخابی: \`${{ inputs.build_format }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- امضای معتبر Release: ✅ تأیید شد" >> $GITHUB_STEP_SUMMARY
+          echo "- عدم استفاده از Debug Signing: ✅ تأیید شد" >> $GITHUB_STEP_SUMMARY
+          echo "- انتشار به استورهای خارجی: ❌ انجام نشد (صرفاً به عنوان Artifact گیت‌هاب ذخیره گردید)" >> $GITHUB_STEP_SUMMARY

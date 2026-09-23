@@ -1,18 +1,47 @@
-*.iml
-.gradle
-.kotlin
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Built application files
+*.apk
+*.aar
+*.aab
+
+# Gradle files
+.gradle/
+build/
+*/build/
+app/build/
+
+# Local configuration file (contains machine-specific paths)
 local.properties
 .env
+.env.local
+
+# Log files
+*.log
+
+# Android Studio / IntelliJ IDEA
+*.iml
+.idea/
+.kotlin/
+.DS_Store
+captures/
+
+# External Native Build
+.externalNativeBuild/
+.cxx/
+
+# Keystores & Signing Keys & Certificates
+*.keystore
+*.jks
+*.key
+*.p12
+*.pem
+release.keystore
 debug.keystore
+debug.keystore*
+
+# Google & Cloud Services & OAuth credentials
+google-services.json
+client_secrets*.json
+service-account*.json
+credentials.json
+token.json
+tokens.json

@@ -138,7 +138,7 @@ object CalculationEngine {
             }
 
             val currentQty = (totalBuyQty - totalSellQty).coerceAtLeast(0.0)
-            if (currentQty <= 0.0 && totalBuyQty == 0.0) continue
+            if (currentQty <= 1e-9) continue  // Fix: نماد کاملاً فروخته‌شده حذف شود
 
             // میانگین قیمت خرید
             val avgBuyPriceToman = if (totalBuyQty > 0 && !hasMissingBuyPrice) {

@@ -401,3 +401,78 @@ fun EmptyStateView(
         }
     }
 }
+
+@Composable
+fun AppDialog(
+    title: String,
+    message: String? = null,
+    confirmText: String = "تأیید",
+    dismissText: String = "انصراف",
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    isDestructive: Boolean = false,
+    content: (@Composable () -> Unit)? = null
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .wrapContentHeight(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                // عنوان
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                // پیام (اختیاری)
+                if (message != null) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                }
+
+                // محتوای سفارشی (اختیاری — مثلاً TextField)
+                if (content != null) {
+                    Box(modifier = Modifier.padding(bottom = 16.dp)) {
+                        content()
+                    }
+                }
+
+                // دکمه‌ها
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(dismissText, fontSize = 14.sp)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onConfirm,
+                        colors = if (isDestructive) ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ) else ButtonDefaults.buttonColors()
+                    ) {
+                        Text(confirmText, fontSize = 14.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+

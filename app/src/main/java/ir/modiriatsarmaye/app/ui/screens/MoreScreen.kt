@@ -71,7 +71,6 @@ fun MoreScreen(
 
     // Google Drive Dialogs
     var showGoogleConnectDialog by remember { mutableStateOf(false) }
-    var googleEmailInput by remember { mutableStateOf("") }
     var googleNameInput by remember { mutableStateOf("") }
     var showDisconnectGoogleConfirm by remember { mutableStateOf(false) }
     var showCloudRestoreConfirmDialog by remember { mutableStateOf(false) }
@@ -854,7 +853,6 @@ fun MoreScreen(
                                 text = "• کش نرخ‌های بازار: بروزرسانی در $cacheTimeStr",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            val cloudStateStr = if (!settings.googleAccountEmail.isNullOrBlank()) "متصل (${settings.googleAccountEmail}) - بدون افشای کلیدها" else "غیرمتصل (امن و خصوصی)"
                             Text(
                                 text = "• امنیت و پشتیبان ابری: $cloudStateStr",
                                 style = MaterialTheme.typography.bodySmall,

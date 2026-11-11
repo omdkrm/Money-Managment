@@ -25,6 +25,7 @@ import ir.modiriatsarmaye.app.ui.theme.*
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthUiState
 import ir.modiriatsarmaye.app.util.HoldingItem
 import ir.modiriatsarmaye.app.util.PersianUtils
+import ir.modiriatsarmaye.app.ui.screens.HoldingDetailSheet
 
 @Composable
 fun PortfolioScreen(
@@ -340,7 +341,8 @@ fun PortfolioScreen(
 fun HoldingCardItem(
     holding: HoldingItem,
     displayCurrency: CurrencyType,
-    onUpdatePrice: () -> Unit
+    onUpdatePrice: (,
+    onClick: () -> Unit = {}) -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -628,7 +630,7 @@ fun DividendCardItem(
     displayCurrency: CurrencyType
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {

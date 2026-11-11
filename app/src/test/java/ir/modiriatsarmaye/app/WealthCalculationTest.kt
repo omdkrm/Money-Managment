@@ -290,4 +290,136 @@ class WealthCalculationTest {
         assertEquals(1_000_000.0, holding.profitLossToman ?: 0.0, 0.01)
         assertEquals(20.0, holding.returnPercent ?: 0.0, 0.01)
     }
+
+    // ===== new tests =====
+    @Test
+    fun `symbol fully sold should not appear in portfolio`() {
+        // Given: خرید ۱۰ واحد، فروش ۱۰ واحد
+        val transactions = listOf(
+            TransactionEntity(
+                id = 1,
+                symbol = "IKCO",
+                type = TransactionType.BUY,
+                quantity = 10.0,
+                pricePerUnit = 5000.0,
+                date = "1402/01/01",
+                category = AssetCategory.STOCK
+            ),
+            TransactionEntity(
+                id = 2,
+                symbol = "IKCO",
+                type = TransactionType.SELL,
+                quantity = 10.0,
+                pricePerUnit = 6000.0,
+                date = "1402/02/01",
+                category = AssetCategory.STOCK
+            )
+        )
+    
+        // When
+        val result = CalculationEngine.calculatePortfolio(transactions, emptyMap())
+    
+        // Then: نماد IKCO نباید در پرتفو باشد
+        assertThat(result.holdings.none { it.symbol == "IKCO" }).isTrue()
+    }
+    
+    @Test
+    fun `symbol partially sold should still appear in portfolio`() {
+        // Given: خرید ۱۰ واحد، فروش ۴ واحد → موجودی ۶
+        val transactions = listOf(
+            TransactionEntity(
+                id = 1,
+                symbol = "IKCO",
+                type = TransactionType.BUY,
+                quantity = 10.0,
+                pricePerUnit = 5000.0,
+                date = "1402/01/01",
+                category = AssetCategory.STOCK
+            ),
+            TransactionEntity(
+                id = 2,
+                symbol = "IKCO",
+                type = TransactionType.SELL,
+                quantity = 4.0,
+                pricePerUnit = 6000.0,
+                date = "1402/02/01",
+                category = AssetCategory.STOCK
+            )
+        )
+    
+        // When
+        val result = CalculationEngine.calculatePortfolio(transactions, emptyMap())
+    
+        // Then: نماد IKCO باید با موجودی ۶ در پرتفو باشد
+        val holding = result.holdings.find { it.symbol == "IKCO" }
+        assertThat(holding).isNotNull()
+        assertThat(holding!!.quantity).isEqualTo(6.0, offset(1e-9))
+    }
+    
+    @Test
+    fun `average buy price calculation is correct`() {
+        // Given: خرید ۱۰ واحد @ ۵۰۰۰ و ۵ واحد @ ۸۰۰۰
+        // میانگین وزنی = (10*5000 + 5*8000) / 15 = (50000 + 40000) / 15 = 6000
+        val transactions = listOf(
+            TransactionEntity(
+                id = 1,
+                symbol = "FOLD",
+                type = TransactionType.BUY,
+                quantity = 10.0,
+                pricePerUnit = 5000.0,
+                date = "1402/01/01",
+                category = AssetCategory.STOCK
+            ),
+            TransactionEntity(
+                id = 2,
+                symbol = "FOLD",
+                type = TransactionType.BUY,
+                quantity = 5.0,
+                pricePerUnit = 8000.0,
+                date = "1402/03/01",
+                category = AssetCategory.STOCK
+            )
+        )
+    
+        // When
+        val result = CalculationEngine.calculatePortfolio(transactions, emptyMap())
+    
+        // Then
+        val holding = result.holdings.find { it.symbol == "FOLD" }
+        assertThat(holding).isNotNull()
+        assertThat(holding!!.averageBuyPrice).isEqualTo(6000.0, offset(0.01))
+    }
+    
+    @Test
+    fun `floating point near-zero quantity treated as fully sold`() {
+        // این تست بررسی می‌کند که خطای اعشاری مثل 1e-15 به عنوان صفر حساب شود
+        val transactions = listOf(
+            TransactionEntity(
+                id = 1,
+                symbol = "VBMELLAT",
+                type = TransactionType.BUY,
+                quantity = 0.1,
+                pricePerUnit = 10000.0,
+                date = "1402/01/01",
+                category = AssetCategory.STOCK
+            ),
+            TransactionEntity(
+                id = 2,
+                symbol = "VBMELLAT",
+                type = TransactionType.SELL,
+                quantity = 0.1,
+                pricePerUnit = 10000.0,
+                date = "1402/02/01",
+                category = AssetCategory.STOCK
+            )
+        )
+    
+        val result = CalculationEngine.calculatePortfolio(transactions, emptyMap())
+    
+        // موجودی 0.1 - 0.1 ممکن است به دلیل floating point عدد کوچکی غیر از صفر باشد
+        // ولی باید از portfolio حذف شود
+        assertThat(result.holdings.none { it.symbol == "VBMELLAT" }).isTrue()
+    }
+    
+
 }

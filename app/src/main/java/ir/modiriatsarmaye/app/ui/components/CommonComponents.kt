@@ -7,9 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.*
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -239,24 +236,27 @@ fun UpdatePriceDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
+                    AppFilterChip(
                         selected = selectedCurrency == CurrencyType.TOMAN,
                         onClick = { selectedCurrency = CurrencyType.TOMAN },
-                        label = { Text("به تومان") },
+                        label = "به تومان",
+                        centerLabel = true,
                         modifier = Modifier.weight(1f)
                     )
-                    FilterChip(
+                    AppFilterChip(
                         selected = selectedCurrency == CurrencyType.RIAL,
                         onClick = { selectedCurrency = CurrencyType.RIAL },
-                        label = { Text("به ریال") },
+                        label = "به ریال",
+                        centerLabel = true,
                         modifier = Modifier.weight(1f)
                     )
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
+            AppDialogActionPair(
+                confirmText = "ذخیره قیمت",
+                onConfirm = {
                     val p = priceText.toDoubleOrNull()
                     if (p == null || p <= 0) {
                         errorMessage = "لطفاً مبلغ معتبر و بزرگتر از صفر وارد کنید."
@@ -269,15 +269,10 @@ fun UpdatePriceDialog(
                         onDismiss()
                     }
                 },
-                modifier = Modifier.testTag("save_price_button")
-            ) {
-                Text("ذخیره قیمت")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("انصراف")
-            }
+                dismissText = "انصراف",
+                onDismiss = onDismiss,
+                confirmTestTag = "save_price_button"
+            )
         }
     )
 }
@@ -308,24 +303,16 @@ fun ConfirmationDialog(
             )
         },
         confirmButton = {
-            Button(
-                onClick = {
+            AppDialogActionPair(
+                confirmText = confirmButtonText,
+                onConfirm = {
                     onConfirm()
                     onDismiss()
                 },
-                colors = if (isDestructive) {
-                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                } else {
-                    ButtonDefaults.buttonColors()
-                }
-            ) {
-                Text(confirmButtonText)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("انصراف")
-            }
+                dismissText = "انصراف",
+                onDismiss = onDismiss,
+                isDestructive = isDestructive
+            )
         }
     )
 }
@@ -353,7 +340,7 @@ fun EmptyStateCard(
 fun EmptyStateView(
     title: String,
     description: String,
-    icon: ImageVector = Icons.Default.Inbox,
+    icon: ImageVector = AppIcons.Inbox,
     actionButtonText: String? = null,
     onActionClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -395,9 +382,10 @@ fun EmptyStateView(
         )
         if (actionButtonText != null && onActionClick != null) {
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onActionClick) {
-                Text(actionButtonText)
-            }
+            AppPrimaryButton(
+                text = actionButtonText,
+                onClick = onActionClick
+            )
         }
     }
 }

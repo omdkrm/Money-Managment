@@ -64,7 +64,7 @@ fun TransactionsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "دفتر تراکنش‌ها (مرجع واحد)",
                         style = MaterialTheme.typography.headlineLarge,
@@ -77,15 +77,15 @@ fun TransactionsScreen(
                     )
                 }
 
-                Button(
+                Spacer(modifier = Modifier.width(12.dp))
+
+                AppPrimaryButton(
+                    text = "ثبت جدید",
                     onClick = onAddTransactionClick,
-                    modifier = Modifier.testTag("add_transaction_top_btn"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("ثبت جدید")
-                }
+                    icon = Icons.Default.Add,
+                    contentPadding = AppButtonDefaults.CompactContentPadding,
+                    modifier = Modifier.testTag("add_transaction_top_btn")
+                )
             }
         }
 
@@ -98,9 +98,11 @@ fun TransactionsScreen(
                 leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (uiState.searchQuery.isNotBlank()) {
-                        IconButton(onClick = { onSearchChange("") }) {
-                            Icon(imageVector = Icons.Default.Clear, contentDescription = "پاک کردن")
-                        }
+                        AppIconActionButton(
+                            icon = Icons.Default.Clear,
+                            contentDescription = "پاک کردن",
+                            onClick = { onSearchChange("") }
+                        )
                     }
                 },
                 singleLine = true,
@@ -128,23 +130,19 @@ fun TransactionsScreen(
                         .testTag("filter_row_asset_classes")
                 ) {
                     item {
-                        FilterChip(
+                        AppFilterChip(
                             selected = uiState.selectedAssetClassFilter == null,
                             onClick = { onSelectClassFilter(null) },
-                            label = { Text("همه دسته‌ها") },
-                            modifier = Modifier
-                                .defaultMinSize(minHeight = 44.dp)
-                                .testTag("filter_chip_class_all")
+                            label = "همه دسته‌ها",
+                            modifier = Modifier.testTag("filter_chip_class_all")
                         )
                     }
                     items(AssetClass.entries) { ac ->
-                        FilterChip(
+                        AppFilterChip(
                             selected = uiState.selectedAssetClassFilter == ac,
                             onClick = { onSelectClassFilter(if (uiState.selectedAssetClassFilter == ac) null else ac) },
-                            label = { Text(ac.titleFa) },
-                            modifier = Modifier
-                                .defaultMinSize(minHeight = 44.dp)
-                                .testTag("filter_chip_class_${ac.name}")
+                            label = ac.titleFa,
+                            modifier = Modifier.testTag("filter_chip_class_${ac.name}")
                         )
                     }
                 }
@@ -168,36 +166,20 @@ fun TransactionsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
+                    AppFilterChip(
                         selected = uiState.selectedActionFilter == null,
                         onClick = { onSelectActionFilter(null) },
-                        label = {
-                            Text(
-                                text = "همه عملیات",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (uiState.selectedActionFilter == null) FontWeight.Bold else FontWeight.Normal
-                            )
-                        },
-                        modifier = Modifier
-                            .defaultMinSize(minHeight = 44.dp)
-                            .testTag("filter_chip_action_all")
+                        label = "همه عملیات",
+                        modifier = Modifier.testTag("filter_chip_action_all")
                     )
 
                     TransactionAction.entries.forEach { act ->
                         val isSelected = uiState.selectedActionFilter == act
-                        FilterChip(
+                        AppFilterChip(
                             selected = isSelected,
                             onClick = { onSelectActionFilter(if (isSelected) null else act) },
-                            label = {
-                                Text(
-                                    text = act.titleFa,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            modifier = Modifier
-                                .defaultMinSize(minHeight = 44.dp)
-                                .testTag("filter_chip_action_${act.name}")
+                            label = act.titleFa,
+                            modifier = Modifier.testTag("filter_chip_action_${act.name}")
                         )
                     }
                 }
@@ -368,34 +350,14 @@ fun TransactionDetailCard(
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // دکمه‌های عملیاتی ویرایش و حذف
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(
-                    onClick = onEdit,
-                    modifier = Modifier.testTag("edit_tx_${transaction.id}")
-                ) {
-                    Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (transaction.unitPrice == null) "تکمیل قیمت خرید" else "ویرایش")
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier.testTag("delete_tx_${transaction.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "حذف",
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
+            // دکمه‌های عملیاتی ویرایش و حذف یکپارچه
+            TransactionCardActionRow(
+                editLabel = if (transaction.unitPrice == null) "تکمیل قیمت خرید" else "ویرایش",
+                onEdit = onEdit,
+                onDelete = onDelete,
+                editTestTag = "edit_tx_${transaction.id}",
+                deleteTestTag = "delete_tx_${transaction.id}"
+            )
         }
     }
 }

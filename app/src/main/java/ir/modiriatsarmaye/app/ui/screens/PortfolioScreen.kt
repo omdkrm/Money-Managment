@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,7 +35,8 @@ fun PortfolioScreen(
     onAddDividendClick: () -> Unit,
     onSyncMarketPrices: () -> Unit,
     onUpdateAllStocks: (() -> Unit)? = null,
-    onUpdateIndividualStock: ((String) -> Unit)? = null
+    onUpdateIndividualStock: ((String) -> Unit)? = null,
+    onHoldingClick: (HoldingItem) -> Unit = {}
 ) {
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     val categories = listOf("همه دارایی‌ها", "طلا و سکه", "صندوق طلا", "صندوق سهامی", "درآمد ثابت", "سهام", "ارز و دلار", "سود نقدی مجامع")
@@ -59,7 +61,8 @@ fun PortfolioScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .testTag("portfolio_screen_list"),
         contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -83,20 +86,24 @@ fun PortfolioScreen(
                     )
                 }
 
-                // دکمه کوچک بروزرسانی سریع نرخ‌ها در هدر
-                IconButton(
-                    onClick = onSyncMarketPrices,
-                    modifier = Modifier.testTag("portfolio_sync_prices_btn")
-                ) {
-                    if (uiState.isMarketUpdating) {
+                // دکمه بروزرسانی سریع نرخ‌ها در هدر با هدف لمسی ۴۸ دی‌پی
+                if (uiState.isMarketUpdating) {
+                    Box(
+                        modifier = Modifier
+                            .size(AppButtonDefaults.MinTouchTarget)
+                            .testTag("portfolio_sync_prices_btn"),
+                        contentAlignment = Alignment.Center
+                    ) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Sync,
-                            contentDescription = "بروزرسانی آنلاین نرخ‌های بازار",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
                     }
+                } else {
+                    AppIconActionButton(
+                        icon = AppIcons.Sync,
+                        contentDescription = "بروزرسانی آنلاین نرخ‌های بازار",
+                        onClick = onSyncMarketPrices,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.testTag("portfolio_sync_prices_btn")
+                    )
                 }
             }
         }
@@ -110,12 +117,16 @@ fun PortfolioScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .padding(14.dp)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Warning,
                                 contentDescription = null,
@@ -123,7 +134,7 @@ fun PortfolioScreen(
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = lastReport.messageFa,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -138,17 +149,14 @@ fun PortfolioScreen(
                             }
                         }
 
-                        Button(
+                        AppDestructiveButton(
+                            text = "تلاش مجدد",
                             onClick = onSyncMarketPrices,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.testTag("retry_sync_btn")
-                        ) {
-                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("تلاش مجدد", style = MaterialTheme.typography.labelMedium)
-                        }
+                            icon = Icons.Default.Refresh,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("retry_sync_btn")
+                        )
                     }
                 }
             }
@@ -226,14 +234,17 @@ fun PortfolioScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(imageVector = AppIcons.QueryStats, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "آخرین بروزرسانی بازار: ${PersianUtils.formatTimestampToPersian(uiState.settings.lastPriceUpdateTimestamp)}",
@@ -242,12 +253,9 @@ fun PortfolioScreen(
                         )
                     }
 
-                    Text(
+                    AppTextButton(
                         text = "بروزرسانی مجدد",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable { onSyncMarketPrices() }
+                        onClick = onSyncMarketPrices
                     )
                 }
             }
@@ -288,17 +296,16 @@ fun PortfolioScreen(
                     Text(
                         text = "سودهای نقدی مصوب مجامع سهام (DPS)",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
                     )
-                    FilledTonalButton(
+                    Spacer(modifier = Modifier.width(12.dp))
+                    AppTonalButton(
+                        text = "ثبت سود مجمع",
                         onClick = onAddDividendClick,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("ثبت سود مجمع", style = MaterialTheme.typography.bodySmall)
-                    }
+                        icon = Icons.Default.Add,
+                        contentPadding = AppButtonDefaults.CompactContentPadding
+                    )
                 }
             }
 
@@ -328,7 +335,8 @@ fun PortfolioScreen(
                     HoldingCardItem(
                         holding = holding,
                         displayCurrency = displayCurrency,
-                        onUpdatePrice = { onUpdatePriceClick(holding) }
+                        onUpdatePrice = { onUpdatePriceClick(holding) },
+                        onClick = { onHoldingClick(holding) }
                     )
                 }
             }
@@ -340,11 +348,14 @@ fun PortfolioScreen(
 fun HoldingCardItem(
     holding: HoldingItem,
     displayCurrency: CurrencyType,
-    onUpdatePrice: () -> Unit
+    onUpdatePrice: () -> Unit,
+    onClick: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
             .testTag("holding_card_${holding.assetName}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -602,20 +613,39 @@ fun HoldingCardItem(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ۵. دکمه ویرایش دستی قیمت روز
-            OutlinedButton(
+            // ۵. دکمه ویرایش دستی قیمت روز و راهنمای مشاهده جزئیات
+            AppOutlinedButton(
+                text = if (holding.currentPriceToman != null) {
+                    "ویرایش یا ثبت دستی نرخ (${PersianUtils.formatMoney(holding.currentPriceOriginal, holding.currentPriceCurrency)})"
+                } else {
+                    "ثبت دستی قیمت روز دارایی"
+                },
                 onClick = onUpdatePrice,
+                icon = AppIcons.EditCalendar,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("update_price_btn_${holding.assetName}"),
-                shape = RoundedCornerShape(10.dp)
+                    .testTag("update_price_btn_${holding.assetName}")
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(imageVector = Icons.Default.EditCalendar, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (holding.currentPriceToman != null) "ویرایش یا ثبت دستی نرخ (${PersianUtils.formatMoney(holding.currentPriceOriginal, holding.currentPriceCurrency)})" else "ثبت دستی قیمت روز دارایی",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium
+                    text = "مشاهده جزئیات و تاریخچه تراکنش‌ها",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

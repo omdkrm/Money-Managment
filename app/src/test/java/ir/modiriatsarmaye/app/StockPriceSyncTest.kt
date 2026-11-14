@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import ir.modiriatsarmaye.app.data.local.AppDatabase
 import ir.modiriatsarmaye.app.data.market.CompositeMarketDataProvider
+import ir.modiriatsarmaye.app.data.market.FundMarketPriceProvider
 import ir.modiriatsarmaye.app.data.market.GoldPriceProvider
 import ir.modiriatsarmaye.app.data.market.StockInstrumentMapper
 import ir.modiriatsarmaye.app.data.market.StockPriceProvider
@@ -16,6 +17,7 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -53,6 +55,11 @@ class StockPriceSyncTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
+    }
+
+    @After
+    fun tearDown() {
+        db.close()
     }
 
     private fun createMockClient(
@@ -216,7 +223,11 @@ class StockPriceSyncTest {
         val client = createMockClient(responseCode = 200, responseBody = "{}")
         val stockProvider = StockPriceProvider(client)
         val goldProvider = GoldPriceProvider(client)
-        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val composite = CompositeMarketDataProvider(
+            goldProvider = goldProvider,
+            stockProvider = stockProvider,
+            fundProvider = FundMarketPriceProvider(client)
+        )
         val repository = WealthRepository(
             database = db,
             marketDataProvider = composite
@@ -309,7 +320,11 @@ class StockPriceSyncTest {
         val client = createMockClient(responseCode = 200, responseBody = tsetmcJson)
         val stockProvider = StockPriceProvider(client)
         val goldProvider = GoldPriceProvider(client)
-        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val composite = CompositeMarketDataProvider(
+            goldProvider = goldProvider,
+            stockProvider = stockProvider,
+            fundProvider = FundMarketPriceProvider(client)
+        )
         val repository = WealthRepository(
             database = db,
             marketDataProvider = composite
@@ -356,7 +371,11 @@ class StockPriceSyncTest {
         val client = createMockClient(throwException = IOException("Network unreachable"))
         val stockProvider = StockPriceProvider(client)
         val goldProvider = GoldPriceProvider(client)
-        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val composite = CompositeMarketDataProvider(
+            goldProvider = goldProvider,
+            stockProvider = stockProvider,
+            fundProvider = FundMarketPriceProvider(client)
+        )
         val repository = WealthRepository(
             database = db,
             marketDataProvider = composite
@@ -502,7 +521,11 @@ class StockPriceSyncTest {
         val client = createMockClient(responseCode = 200, responseBody = "<html><body>سهام 9433</body></html>")
         val stockProvider = StockPriceProvider(client)
         val goldProvider = GoldPriceProvider(client)
-        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val composite = CompositeMarketDataProvider(
+            goldProvider = goldProvider,
+            stockProvider = stockProvider,
+            fundProvider = FundMarketPriceProvider(client)
+        )
         val repository = WealthRepository(database = db, marketDataProvider = composite)
 
         val report = repository.syncStockPrice("سهام")
@@ -559,12 +582,12 @@ class StockPriceSyncTest {
         // ماک پاسخ TSETMC برای هر دو نماد
         val tsetmcJson = """
             {
-                "instrumentSearch": [
+                "marketwatch": [
                     {
                         "lVal18AFC": "فولاد",
                         "lVal30": "فولاد مبارکه اصفهان",
                         "pClosing": 5200,
-                        "pDrCotVal": 5250,
+                        "pDrCotVal": 5200,
                         "insCode": "46348559193224090"
                     },
                     {
@@ -581,7 +604,11 @@ class StockPriceSyncTest {
         val client = createMockClient(responseCode = 200, responseBody = tsetmcJson)
         val stockProvider = StockPriceProvider(client)
         val goldProvider = GoldPriceProvider(client)
-        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val composite = CompositeMarketDataProvider(
+            goldProvider = goldProvider,
+            stockProvider = stockProvider,
+            fundProvider = FundMarketPriceProvider(client)
+        )
         val repository = WealthRepository(database = db, marketDataProvider = composite)
 
         // فراخوانی بروزرسانی دسته‌ای کلیه سهام
@@ -694,7 +721,7 @@ class StockPriceSyncTest {
 
         val tsetmcJson = """
             {
-                "instrumentSearch": [
+                "marketwatch": [
                     {
                         "lVal18AFC": "فولاد",
                         "lVal30": "فولاد مبارکه اصفهان",
@@ -709,7 +736,11 @@ class StockPriceSyncTest {
         val client = createMockClient(responseCode = 200, responseBody = tsetmcJson)
         val stockProvider = StockPriceProvider(client)
         val goldProvider = GoldPriceProvider(client)
-        val composite = CompositeMarketDataProvider(goldProvider = goldProvider, stockProvider = stockProvider)
+        val composite = CompositeMarketDataProvider(
+            goldProvider = goldProvider,
+            stockProvider = stockProvider,
+            fundProvider = FundMarketPriceProvider(client)
+        )
         val repository = WealthRepository(database = db, marketDataProvider = composite)
 
         val report = repository.syncAllStockPrices(forceRefresh = true)

@@ -11,7 +11,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -84,22 +83,16 @@ fun PersianDatePickerDialog(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    TextButton(
+                    AppTextButton(
+                        text = "امروز",
+                        icon = AppIcons.CalendarToday,
                         onClick = {
                             displayedYear = today.year
                             displayedMonth = today.month
                             selectedDate = today
                         },
                         modifier = Modifier.testTag("date_picker_today_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CalendarToday,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("امروز", style = MaterialTheme.typography.labelMedium)
-                    }
+                    )
                 }
 
                 // جعبه نمایش تاریخ کامل انتخاب شده
@@ -303,36 +296,18 @@ fun PersianDatePickerDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // دکمه‌های تأیید و انصراف با دسترسی‌پذیری و حداقل ۴۸ دی‌پی
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(
-                        onClick = onDismissRequest,
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("date_picker_cancel_button")
-                    ) {
-                        Text("انصراف", style = MaterialTheme.typography.labelLarge)
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Button(
-                        onClick = {
-                            onDateSelected(selectedDate)
-                            onDismissRequest()
-                        },
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("date_picker_confirm_button"),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("تأیید تاریخ", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                    }
-                }
+                // دکمه‌های تأیید و انصراف هم‌عرض و هم‌ارتفاع با حداقل ۴۸ دی‌پی
+                AppDialogActionPair(
+                    confirmText = "تأیید تاریخ",
+                    onConfirm = {
+                        onDateSelected(selectedDate)
+                        onDismissRequest()
+                    },
+                    dismissText = "انصراف",
+                    onDismiss = onDismissRequest,
+                    confirmTestTag = "date_picker_confirm_button",
+                    dismissTestTag = "date_picker_cancel_button"
+                )
             }
         }
     }

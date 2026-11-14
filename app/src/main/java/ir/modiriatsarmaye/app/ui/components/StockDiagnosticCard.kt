@@ -99,7 +99,7 @@ fun StockDiagnosticCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.QueryStats,
+                        imageVector = AppIcons.QueryStats,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
@@ -127,7 +127,7 @@ fun StockDiagnosticCard(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Icon(
-                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        imageVector = if (isExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
                         contentDescription = "باز/بسته کردن عیب‌یابی سهام",
                         modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -135,48 +135,49 @@ fun StockDiagnosticCard(
                 }
             }
 
-            // دکمه‌های عملیاتی: بروزرسانی همه سهام / بروزرسانی یک سهم مشخص
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (onUpdateAllStocks != null) {
-                    Button(
-                        onClick = onUpdateAllStocks,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("update_all_stocks_btn"),
-                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+            // دکمه‌های عملیاتی: بروزرسانی همه سهام / استعلام نماد تکی
+            if (onUpdateAllStocks != null && onUpdateIndividualStock != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                AppActionPair(
+                    firstButton = { itemModifier ->
+                        AppPrimaryButton(
+                            text = "بروزرسانی همه سهام",
+                            onClick = onUpdateAllStocks,
+                            icon = Icons.Default.Refresh,
+                            contentPadding = AppButtonDefaults.CompactContentPadding,
+                            modifier = itemModifier.testTag("update_all_stocks_btn")
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("بروزرسانی همه سهام", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-
-                if (onUpdateIndividualStock != null) {
-                    OutlinedButton(
-                        onClick = { showSingleSymbolDialog = true },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("update_single_stock_btn"),
-                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+                    },
+                    secondButton = { itemModifier ->
+                        AppOutlinedButton(
+                            text = "استعلام نماد تکی",
+                            onClick = { showSingleSymbolDialog = true },
+                            icon = Icons.Default.Search,
+                            contentPadding = AppButtonDefaults.CompactContentPadding,
+                            modifier = itemModifier.testTag("update_single_stock_btn")
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("استعلام نماد تکی", style = MaterialTheme.typography.labelSmall)
                     }
-                }
+                )
+            } else if (onUpdateAllStocks != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                AppPrimaryButton(
+                    text = "بروزرسانی همه سهام",
+                    onClick = onUpdateAllStocks,
+                    icon = Icons.Default.Refresh,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("update_all_stocks_btn")
+                )
+            } else if (onUpdateIndividualStock != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                AppOutlinedButton(
+                    text = "استعلام نماد تکی",
+                    onClick = { showSingleSymbolDialog = true },
+                    icon = Icons.Default.Search,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("update_single_stock_btn")
+                )
             }
 
             AnimatedVisibility(
@@ -397,23 +398,19 @@ fun StockDiagnosticCard(
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
+                AppDialogActionPair(
+                    confirmText = "استعلام آنلاین",
+                    onConfirm = {
                         val sym = inputSymbol.trim()
                         if (sym.isNotBlank()) {
                             onUpdateIndividualStock?.invoke(sym)
                         }
                         showSingleSymbolDialog = false
                     },
-                    modifier = Modifier.testTag("submit_single_stock_btn")
-                ) {
-                    Text("استعلام آنلاین")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSingleSymbolDialog = false }) {
-                    Text("انصراف")
-                }
+                    dismissText = "انصراف",
+                    onDismiss = { showSingleSymbolDialog = false },
+                    confirmTestTag = "submit_single_stock_btn"
+                )
             }
         )
     }

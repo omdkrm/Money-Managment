@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import ir.modiriatsarmaye.app.data.local.AppDatabase
 import ir.modiriatsarmaye.app.data.market.CompositeMarketDataProvider
+import ir.modiriatsarmaye.app.data.market.FundInstrumentMapper
 import ir.modiriatsarmaye.app.data.market.StockInstrumentMapper
 import ir.modiriatsarmaye.app.data.market.StockPriceProvider
 import ir.modiriatsarmaye.app.data.model.*
@@ -87,10 +88,10 @@ class FundPriceSyncTest {
     @Test
     fun testFundSymbolResolutionAndNormalization() {
         // نرمال‌سازی نماد صندوق‌های معتبر بورس
-        assertEquals("آگاس", StockInstrumentMapper.normalizeSymbol("صندوق آگاس"))
-        assertEquals("اهرم", StockInstrumentMapper.normalizeSymbol("  صندوق کاریزما اهرم "))
-        assertEquals("کهربا", StockInstrumentMapper.normalizeSymbol("صندوق طلای کهربا"))
-        assertEquals("عیار", StockInstrumentMapper.normalizeSymbol("صندوق طلای عیار"))
+        assertEquals("آگاس", FundInstrumentMapper.normalizeFundSymbol("صندوق آگاس"))
+        assertEquals("اهرم", FundInstrumentMapper.normalizeFundSymbol("  صندوق کاریزما اهرم "))
+        assertEquals("کهربا", FundInstrumentMapper.normalizeFundSymbol("صندوق طلای کهربا"))
+        assertEquals("عیار", FundInstrumentMapper.normalizeFundSymbol("صندوق طلای عیار"))
 
         // تشخیص برچسب‌های عمومی نامعتبر
         assertFalse(StockInstrumentMapper.isValidSymbol("صندوق"))
@@ -195,11 +196,7 @@ class FundPriceSyncTest {
 
         // شبیه‌سازی خطای قطعی اینترنت
         val timeoutClient = createMockClient(throwException = SocketTimeoutException("اتصال اینترنت قطع شد"))
-        val stockProvider = StockPriceProvider(timeoutClient)
-        val composite = CompositeMarketDataProvider(
-            stockProvider = stockProvider,
-            goldProvider = ir.modiriatsarmaye.app.data.market.GoldPriceProvider(timeoutClient)
-        )
+        val composite = CompositeMarketDataProvider(timeoutClient)
 
         val syncRepo = WealthRepository(db, context, composite)
         // اجرای همگام‌سازی در شرایط قطعی شبکه
@@ -210,5 +207,133 @@ class FundPriceSyncTest {
         val currentPrice = allPrices.find { it.assetSymbolOrName == "اهرم" }
         assertNotNull(currentPrice)
         assertEquals(1950.0, currentPrice!!.price, 0.01)
+    }
+
+    @Test
+    fun testFundPriceFetchWithMockedClient() = runBlocking {
+        val mockHtml = """
+            <html>
+            <body>
+            <table>
+                <tr>
+                    <td><a href="/profile/fund-agas">صندوق آگاس</a></td>
+                    <td>۲۴,۵۰۰</td>
+                    <td>۲۴,۲۰۰</td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val mockClient = createMockClient(responseCode = 200, responseBody = mockHtml)
+        val fundProvider = ir.modiriatsarmaye.app.data.market.FundMarketPriceProvider(mockClient)
+
+        val result = fundProvider.fetchPrices()
+        assertTrue(result.isSuccess)
+        val list = result.getOrNull()
+        assertNotNull(list)
+        assertTrue(list!!.isNotEmpty())
+        val agas = list.find { it.symbolOrName == "آگاس" }
+        assertNotNull(agas)
+        assertEquals(2450.0, agas!!.price, 0.01)
+        assertEquals(AssetClass.EQUITY_FUND, agas.assetClass)
+
+        val singleResult = fundProvider.fetchPriceForAsset("آگاس", AssetClass.EQUITY_FUND)
+        assertTrue(singleResult.isSuccess)
+        assertEquals(2450.0, singleResult.getOrNull()!!.price, 0.01)
+    }
+
+    @Test
+    fun testMalformedFundResponseDoesNotOverwriteValidPriceWithZero() = runBlocking {
+        // ثبت قیمت معتبر قبلی
+        val existingPrice = CurrentPriceEntity(
+            assetSymbolOrName = "آگاس",
+            assetName = "صندوق سهامی آگاس",
+            assetClass = AssetClass.EQUITY_FUND,
+            price = 2100.0,
+            currency = CurrencyType.TOMAN,
+            source = "Cache",
+            lastUpdated = System.currentTimeMillis() - 100000L
+        )
+        repository.updateCurrentPrice(existingPrice)
+
+        val tx = TransactionEntity(
+            id = 0,
+            datePersian = "1403/02/01",
+            assetClass = AssetClass.EQUITY_FUND,
+            assetName = "صندوق سهامی آگاس",
+            assetSymbol = "آگاس",
+            action = TransactionAction.BUY,
+            quantity = 100.0,
+            unit = "واحد",
+            unitPrice = 2000.0,
+            totalAmount = 200_000.0
+        )
+        repository.saveTransaction(tx)
+
+        // پاسخ خراب و نامعتبر از سرور
+        val malformedClient = createMockClient(responseCode = 200, responseBody = "<html><body><div>خطای ساختار</div></body></html>")
+        val composite = CompositeMarketDataProvider(malformedClient)
+        val syncRepo = WealthRepository(db, context, composite)
+
+        syncRepo.syncMarketPrices(forceRefresh = true)
+
+        val afterPrices = syncRepo.allPricesFlow.first()
+        val stored = afterPrices.find { it.assetSymbolOrName == "آگاس" }
+        assertNotNull(stored)
+        assertEquals(2100.0, stored!!.price, 0.01)
+        assertTrue(stored.price > 0.0)
+    }
+
+    @Test
+    fun testBulkFundSyncPersistsAndUpdatesPortfolio() = runBlocking {
+        val tx = TransactionEntity(
+            id = 0,
+            datePersian = "1403/02/15",
+            assetClass = AssetClass.GOLD_FUND,
+            assetName = "صندوق طلای کهربا",
+            assetSymbol = "کهربا",
+            action = TransactionAction.BUY,
+            quantity = 500.0,
+            unit = "واحد",
+            unitPrice = 3000.0,
+            totalAmount = 1_500_000.0
+        )
+        repository.saveTransaction(tx)
+
+        val mockHtml = """
+            <html>
+            <body>
+            <table>
+                <tr>
+                    <td><a href="/profile/fund-kahroba">صندوق کهربا</a></td>
+                    <td>۳۶,۰۰۰</td>
+                    <td>۳۵,۵۰۰</td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val mockClient = createMockClient(responseCode = 200, responseBody = mockHtml)
+        val composite = CompositeMarketDataProvider(mockClient)
+        val syncRepo = WealthRepository(db, context, composite)
+
+        val report = syncRepo.syncMarketPrices(forceRefresh = true)
+        assertTrue(report.updatedCount >= 1)
+
+        // بازخوانی از Room
+        val stored = db.currentPriceDao().getPrice("کهربا")
+        assertNotNull(stored)
+        assertEquals(3600.0, stored!!.price, 0.01)
+
+        // محاسبه پورتفوی با قیمت همگام‌شده
+        val txs = syncRepo.allTransactionsFlow.first()
+        val prices = syncRepo.allPricesFlow.first()
+        val summary = CalculationEngine.calculatePortfolio(txs, prices, AppSettingsEntity(), emptyList())
+        val holding = summary.holdings.firstOrNull()
+        assertNotNull(holding)
+        assertEquals(1_800_000.0, holding!!.currentValueToman ?: 0.0, 0.01)
+        assertEquals(300_000.0, holding.profitLossToman ?: 0.0, 0.01)
     }
 }

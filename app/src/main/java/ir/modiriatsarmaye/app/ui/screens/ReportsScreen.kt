@@ -189,16 +189,17 @@ fun ReportsScreen(
                     Text(
                         text = "اهداف مالی و استقلال مالی",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
                     )
-                    Button(
+                    Spacer(modifier = Modifier.width(12.dp))
+                    AppPrimaryButton(
+                        text = "هدف جدید",
                         onClick = { showAddGoalDialog = true },
+                        icon = Icons.Default.Add,
+                        contentPadding = AppButtonDefaults.CompactContentPadding,
                         modifier = Modifier.testTag("add_goal_btn")
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("هدف جدید")
-                    }
+                    )
                 }
             }
 
@@ -342,13 +343,16 @@ fun ReportsScreen(
                             Text(
                                 text = "مدیریت بدهی‌ها و تعهدات",
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
                             )
-                            Button(onClick = { showAddLiabilityDialog = true }) {
-                                Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("ثبت بدهی")
-                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            AppPrimaryButton(
+                                text = "ثبت بدهی",
+                                onClick = { showAddLiabilityDialog = true },
+                                icon = Icons.Default.Add,
+                                contentPadding = AppButtonDefaults.CompactContentPadding
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -598,11 +602,15 @@ fun GoalProgressCard(
                 Text(
                     text = goal.title,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = onDelete) {
-                    Icon(imageVector = Icons.Default.DeleteOutline, contentDescription = "حذف", tint = MaterialTheme.colorScheme.error)
-                }
+                AppIconActionButton(
+                    icon = AppIcons.DeleteOutline,
+                    contentDescription = "حذف هدف",
+                    onClick = onDelete,
+                    tint = MaterialTheme.colorScheme.error
+                )
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -656,17 +664,21 @@ fun LiabilityCardItem(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(text = liability.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (liability.monthlyPaymentToman > 0) {
                     Text(text = "قسط ماهانه: ${PersianUtils.formatMoney(liability.monthlyPaymentToman, displayCurrency)}", style = MaterialTheme.typography.bodySmall)
                 }
             }
+            Spacer(modifier = Modifier.width(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(text = PersianUtils.formatMoney(liability.totalAmountToman, displayCurrency), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = LossRed)
-                IconButton(onClick = onDelete) {
-                    Icon(imageVector = Icons.Default.DeleteOutline, contentDescription = "حذف", tint = MaterialTheme.colorScheme.error)
-                }
+                AppIconActionButton(
+                    icon = AppIcons.DeleteOutline,
+                    contentDescription = "حذف بدهی",
+                    onClick = onDelete,
+                    tint = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
@@ -714,8 +726,9 @@ fun AddGoalDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
+            AppDialogActionPair(
+                confirmText = "ذخیره هدف",
+                onConfirm = {
                     val amount = targetAmountText.toDoubleOrNull() ?: 0.0
                     if (title.isNotBlank() && amount > 0) {
                         onSave(
@@ -726,13 +739,10 @@ fun AddGoalDialog(
                             )
                         )
                     }
-                }
-            ) {
-                Text("ذخیره هدف")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("انصراف") }
+                },
+                dismissText = "انصراف",
+                onDismiss = onDismiss
+            )
         }
     )
 }
@@ -778,8 +788,9 @@ fun AddLiabilityDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
+            AppDialogActionPair(
+                confirmText = "ثبت بدهی",
+                onConfirm = {
                     val total = amountText.toDoubleOrNull() ?: 0.0
                     val monthly = monthlyPaymentText.toDoubleOrNull() ?: 0.0
                     if (title.isNotBlank() && total > 0) {
@@ -791,13 +802,10 @@ fun AddLiabilityDialog(
                             )
                         )
                     }
-                }
-            ) {
-                Text("ثبت بدهی")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("انصراف") }
+                },
+                dismissText = "انصراف",
+                onDismiss = onDismiss
+            )
         }
     )
 }

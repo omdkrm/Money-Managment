@@ -17,12 +17,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class GoogleAccountInfo(
-    val email: String,
-    val displayName: String?,
-    val connectedAt: Long = System.currentTimeMillis()
-)
-
 data class DriveBackupInfo(
     val fileId: String,
     val fileName: String,
@@ -36,66 +30,23 @@ data class DriveBackupInfo(
 )
 
 /**
- * مدیریت واقعی پشتیبان‌گیری ابری در Google Drive با استفاده از Google Drive REST API v3
- * 
- * اصول کلیدی:
- * ۱. هرگز موفقیت جعلی گزارش نمی‌شود؛ تنها در صورت آپلود قطعی و تأیید شناسه فایل در گوگل درایو موفقیت ثبت می‌گردد.
- * ۲. اگر دسترسی یا شناسه کلاینت تنظیم نشده باشد، صراحتاً پیام «پشتیبانگیری ابری هنوز تنظیم نشده است» ارائه می‌شود.
- * ۳. توکن‌ها و مشخصات هویتی درون فایل خروجی JSON ذخیره نمی‌شوند و در لاگ‌ها درج نمی‌گردند.
+ * مدل متادیتای پشتیبان ابری Google Drive.
+ * توجه: احراز هویت و ورود به حساب گوگل از برنامه حذف شده است؛ بنابراین پشتیبان‌گیری ابری
+ * مستلزم احراز هویت گوگل غیرفعال بوده و پشتیبان‌گیری استاندارد JSON به صورت محلی انجام می‌شود.
  */
 class GoogleDriveBackupManager(
-    private val context: Context
+    @Suppress("unused") private val context: Context
 ) {
     companion object {
         private const val TAG = "GoogleDriveBackup"
-        private const val PREFS_NAME = "google_drive_secure_prefs"
-        private const val KEY_ACCESS_TOKEN = "oauth_access_token"
-        private const val KEY_ACCOUNT_EMAIL = "oauth_account_email"
-        private const val KEY_ACCOUNT_NAME = "oauth_account_name"
-        private const val KEY_CONNECTED_AT = "oauth_connected_at"
 
         const val DRIVE_FOLDER_NAME = "مدیریت سرمایه - Backup"
         const val DRIVE_API_FILES_URL = "https://www.googleapis.com/drive/v3/files"
         const val DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+        const val AUTH_REMOVED_MESSAGE = "احراز هویت حساب گوگل از برنامه حذف شده است؛ از پشتیبان‌گیری محلی JSON استفاده کنید."
     }
 
-    private val securePrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-    /**
-     * ذخیره امن اعتبارنامه OAuth در SharedPreferences خصوصی
-     * عدم ذخیره کلمه عبور و عدم درج توکن در لاگ‌ها
-     */
-    fun saveOAuthCredentials(email: String, displayName: String?, accessToken: String?) {
-        securePrefs.edit()
-            .putString(KEY_ACCOUNT_EMAIL, email.trim())
-            .putString(KEY_ACCOUNT_NAME, displayName?.trim())
-            .putString(KEY_ACCESS_TOKEN, accessToken?.trim())
-            .putLong(KEY_CONNECTED_AT, System.currentTimeMillis())
-            .apply()
-    }
-
-    fun getConnectedAccount(): GoogleAccountInfo? {
-        val email = securePrefs.getString(KEY_ACCOUNT_EMAIL, null) ?: return null
-        val name = securePrefs.getString(KEY_ACCOUNT_NAME, null)
-        val connectedAt = securePrefs.getLong(KEY_CONNECTED_AT, 0L)
-        return GoogleAccountInfo(email = email, displayName = name, connectedAt = connectedAt)
-    }
-
-    fun getAccessToken(): String? {
-        return securePrefs.getString(KEY_ACCESS_TOKEN, null)
-    }
-
-    fun isConfigured(): Boolean {
-        val token = getAccessToken()
-        return !token.isNullOrBlank()
-    }
-
-    /**
-     * قطع اتصال و پاک‌سازی کامل نشست و توکن‌ها
-     */
-    fun clearCloudSession() {
-        securePrefs.edit().clear().apply()
-    }
+    fun isConfigured(): Boolean = false
 
     /**
      * بررسی و اعتبارسنجی ساختار فایل پشتیبان
@@ -126,127 +77,16 @@ class GoogleDriveBackupManager(
     /**
      * ارسال واقعی فایل پشتیبان به Google Drive از طریق REST API
      */
-    suspend fun uploadBackupToDrive(jsonContent: String, accountEmail: String?): Result<DriveBackupInfo> = withContext(Dispatchers.IO) {
-        if (accountEmail.isNullOrBlank()) {
-            return@withContext Result.failure(Exception("برای پشتیبانگیری ابری ابتدا حساب Google را متصل کنید."))
-        }
-
-        val token = getAccessToken()
-        if (token.isNullOrBlank()) {
-            // محیط فاقد کلاینت OAuth فعال Google Drive است
-            return@withContext Result.failure(Exception("پشتیبانگیری ابری هنوز تنظیم نشده است"))
-        }
-
-        val validation = validateBackupJson(jsonContent)
-        if (validation.isFailure) {
-            return@withContext validation
-        }
-
-        val parsed = validation.getOrThrow()
-
-        try {
-            // ۱. یافتن یا ایجاد پوشه پشتیبان در گوگل درایو
-            val folderIdResult = getOrCreateBackupFolder(token)
-            if (folderIdResult.isFailure) {
-                return@withContext Result.failure(folderIdResult.exceptionOrNull() ?: Exception("خطا در ایجاد پوشه در Google Drive"))
-            }
-            val folderId = folderIdResult.getOrThrow()
-
-            // ۲. آپلود فایل با متد multipart
-            val uploadResult = performMultipartUpload(
-                token = token,
-                fileName = parsed.fileName,
-                jsonContent = jsonContent,
-                parentFolderId = folderId
-            )
-            if (uploadResult.isFailure) {
-                return@withContext Result.failure(uploadResult.exceptionOrNull() ?: Exception("بارگذاری پشتیبان در Google Drive انجام نشد."))
-            }
-
-            val uploadedFileId = uploadResult.getOrThrow()
-
-            // ۳. بررسی و راستی‌آزمایی وجود فایل و متادیتای آن در Google Drive
-            val verifyResult = verifyFileInDrive(token, uploadedFileId)
-            if (verifyResult.isFailure) {
-                return@withContext Result.failure(verifyResult.exceptionOrNull() ?: Exception("تأیید بارگذاری فایل در Google Drive ناموفق بود."))
-            }
-
-            val verifiedInfo = parsed.copy(fileId = uploadedFileId)
-            Result.success(verifiedInfo)
-        } catch (e: Exception) {
-            val friendlyMsg = mapExceptionToPersian(e)
-            Result.failure(Exception(friendlyMsg))
-        }
+    suspend fun uploadBackupToDrive(jsonContent: String, @Suppress("unused") accountEmail: String?): Result<DriveBackupInfo> = withContext(Dispatchers.IO) {
+        Result.failure(Exception(AUTH_REMOVED_MESSAGE))
     }
 
-    /**
-     * دریافت لیست و آخرین فایل پشتیبان از Google Drive
-     */
-    suspend fun downloadBackupFromDrive(accountEmail: String?): Result<DriveBackupInfo> = withContext(Dispatchers.IO) {
-        if (accountEmail.isNullOrBlank()) {
-            return@withContext Result.failure(Exception("برای پشتیبانگیری ابری ابتدا حساب Google را متصل کنید."))
-        }
-
-        val token = getAccessToken()
-        if (token.isNullOrBlank()) {
-            return@withContext Result.failure(Exception("پشتیبانگیری ابری هنوز تنظیم نشده است"))
-        }
-
-        try {
-            // ۱. جستجوی فایل‌های پشتیبان
-            val filesResult = listDriveBackupFiles(token)
-            if (filesResult.isFailure) {
-                return@withContext Result.failure(filesResult.exceptionOrNull() ?: Exception("خطا در دریافت لیست پشتیبان‌ها از Google Drive"))
-            }
-            val files = filesResult.getOrThrow()
-            if (files.isEmpty()) {
-                return@withContext Result.failure(Exception("هیچ نسخه پشتیبانی در حساب Google Drive شما یافت نشد."))
-            }
-
-            val latestFile = files.first()
-            val fileId = latestFile.first
-            val fileName = latestFile.second
-
-            // ۲. دانلود محتوای فایل
-            val contentResult = downloadDriveFileContent(token, fileId)
-            if (contentResult.isFailure) {
-                return@withContext Result.failure(contentResult.exceptionOrNull() ?: Exception("خطا در دانلود فایل پشتیبان از Google Drive"))
-            }
-            val jsonContent = contentResult.getOrThrow()
-
-            // ۳. اعتبارسنجی کامل JSON با SafeBackupManager
-            val report = SafeBackupManager.validateAndParseBackup(jsonContent)
-            if (!report.isValid) {
-                return@withContext Result.failure(Exception("فایل پشتیبان دانلود شده معتبر نیست یا آسیب دیده است."))
-            }
-
-            val info = DriveBackupInfo(
-                fileId = fileId,
-                fileName = fileName,
-                sizeBytes = jsonContent.toByteArray(Charsets.UTF_8).size.toLong(),
-                timestamp = System.currentTimeMillis(),
-                transactionsCount = report.validTransactions.size,
-                pricesCount = report.validPrices.size,
-                goalsCount = report.validGoals.size,
-                liabilitiesCount = report.validLiabilities.size,
-                rawJson = jsonContent
-            )
-            Result.success(info)
-        } catch (e: Exception) {
-            val friendlyMsg = mapExceptionToPersian(e)
-            Result.failure(Exception(friendlyMsg))
-        }
+    suspend fun downloadBackupFromDrive(@Suppress("unused") accountEmail: String?): Result<DriveBackupInfo> = withContext(Dispatchers.IO) {
+        Result.failure(Exception(AUTH_REMOVED_MESSAGE))
     }
 
-    /**
-     * لیست فایل‌های پشتیبان موجود در گوگل درایو کاربر
-     */
     suspend fun listAvailableBackups(): Result<List<Pair<String, String>>> = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        if (token.isNullOrBlank()) {
-            return@withContext Result.failure(Exception("پشتیبانگیری ابری هنوز تنظیم نشده است"))
-        }
-        listDriveBackupFiles(token)
+        Result.failure(Exception(AUTH_REMOVED_MESSAGE))
     }
 
     private fun getOrCreateBackupFolder(token: String): Result<String> {

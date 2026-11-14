@@ -81,6 +81,310 @@ data class CashFlowSummary(
 
 object CalculationEngine {
 
+    const val ZERO_QUANTITY_EPSILON = 1e-8
+
+    data class AssetPositionMetrics(
+        val assetName: String,
+        val assetSymbol: String,
+        val assetClass: AssetClass,
+        val unit: String,
+        val quantity: Double,
+        val remainingCostToman: Double,
+        val averagePurchasePriceToman: Double?,
+        val hasMissingBuyPrice: Boolean,
+        val totalBoughtQuantity: Double,
+        val totalSoldQuantity: Double,
+        val totalDividendsToman: Double
+    )
+
+    data class AssetDetailSummary(
+        val assetName: String,
+        val assetSymbol: String,
+        val assetClass: AssetClass,
+        val unit: String,
+        val currentQuantity: Double,
+        val isSoldOut: Boolean,
+        val currentPriceToman: Double?,
+        val currentPriceOriginal: Double?,
+        val currentPriceCurrency: CurrencyType,
+        val currentPriceSource: String,
+        val currentPriceLastUpdated: Long,
+        val currentPriceStatus: PriceStatus,
+        val currentPriceErrorMessage: String?,
+        val currentValueToman: Double?,
+        val weightedAveragePurchasePriceToman: Double?,
+        val isPurchasePriceMissing: Boolean,
+        val remainingCostBasisToman: Double,
+        val unrealizedProfitLossToman: Double?,
+        val unrealizedReturnPercent: Double?,
+        val priceGrowthPercent: Double?,
+        val totalBoughtQuantity: Double,
+        val totalSoldQuantity: Double,
+        val totalDividendsToman: Double,
+        val transactions: List<TransactionEntity>
+    )
+
+    /**
+     * محاسبه دقیق مانده دارایی و بهای تمام‌شده میانگین موزون به ترتیب زمانی (Sequential Weighted Average Cost Basis)
+     */
+    fun calculateAssetPositionMetrics(
+        assetName: String,
+        txList: List<TransactionEntity>
+    ): AssetPositionMetrics {
+        val sampleTx = txList.first()
+        val assetClass = sampleTx.assetClass
+        val assetSymbol = txList.firstOrNull { it.assetSymbol.isNotBlank() }?.assetSymbol ?: sampleTx.assetSymbol
+        val unit = txList.firstOrNull { it.unit.isNotBlank() }?.unit ?: sampleTx.unit
+
+        val orderedTxs = txList.sortedWith(compareBy<TransactionEntity>({ it.timestamp }, { it.id }))
+
+        var remainingQty = 0.0
+        var remainingCostToman = 0.0
+        var hasMissingBuyPrice = false
+        var totalBoughtQty = 0.0
+        var totalSoldQty = 0.0
+        var totalDividendsToman = 0.0
+
+        for (tx in orderedTxs) {
+            val txCostToman = when {
+                tx.totalAmount != null -> PersianUtils.convertCurrency(tx.totalAmount, tx.currency, CurrencyType.TOMAN)
+                tx.unitPrice != null -> PersianUtils.convertCurrency(tx.quantity * tx.unitPrice + tx.fees, tx.currency, CurrencyType.TOMAN)
+                else -> null
+            }
+
+            when (tx.action) {
+                TransactionAction.BUY -> {
+                    if (tx.quantity > 0.0) {
+                        remainingQty += tx.quantity
+                        totalBoughtQty += tx.quantity
+                        if (txCostToman != null) {
+                            remainingCostToman += txCostToman
+                        } else {
+                            hasMissingBuyPrice = true
+                        }
+                    }
+                }
+                TransactionAction.SELL -> {
+                    if (tx.quantity > 0.0) {
+                        totalSoldQty += tx.quantity
+                        val effectiveSellQty = tx.quantity.coerceAtMost(remainingQty)
+                        if (effectiveSellQty > 0.0 && remainingQty > ZERO_QUANTITY_EPSILON) {
+                            val avgCostPerUnit = remainingCostToman / remainingQty
+                            val allocatedSoldCost = avgCostPerUnit * effectiveSellQty
+                            remainingCostToman = (remainingCostToman - allocatedSoldCost).coerceAtLeast(0.0)
+                            remainingQty = (remainingQty - effectiveSellQty).coerceAtLeast(0.0)
+                        }
+                        if (remainingQty <= ZERO_QUANTITY_EPSILON) {
+                            remainingQty = 0.0
+                            remainingCostToman = 0.0
+                            hasMissingBuyPrice = false
+                        }
+                    }
+                }
+                TransactionAction.DIVIDEND -> {
+                    val divAmountToman = when {
+                        tx.totalAmount != null -> PersianUtils.convertCurrency(tx.totalAmount, tx.currency, CurrencyType.TOMAN)
+                        tx.unitPrice != null -> PersianUtils.convertCurrency(tx.quantity * tx.unitPrice, tx.currency, CurrencyType.TOMAN)
+                        else -> 0.0
+                    }
+                    totalDividendsToman += divAmountToman.coerceAtLeast(0.0)
+                }
+                TransactionAction.DEPOSIT,
+                TransactionAction.WITHDRAWAL -> {
+                    // عملیات نقدی تغییری در تعداد و بهای تمام‌شده واحد دارایی ایجاد نمی‌کند
+                }
+            }
+        }
+
+        val normalizedQty = if (remainingQty <= ZERO_QUANTITY_EPSILON) 0.0 else remainingQty
+        val normalizedCost = if (normalizedQty == 0.0) 0.0 else remainingCostToman
+        val avgBuyPriceToman = if (normalizedQty > ZERO_QUANTITY_EPSILON && !hasMissingBuyPrice) {
+            normalizedCost / normalizedQty
+        } else null
+
+        return AssetPositionMetrics(
+            assetName = assetName,
+            assetSymbol = assetSymbol,
+            assetClass = assetClass,
+            unit = unit,
+            quantity = normalizedQty,
+            remainingCostToman = normalizedCost,
+            averagePurchasePriceToman = avgBuyPriceToman,
+            hasMissingBuyPrice = hasMissingBuyPrice,
+            totalBoughtQuantity = totalBoughtQty,
+            totalSoldQuantity = totalSoldQty,
+            totalDividendsToman = totalDividendsToman
+        )
+    }
+
+    private fun resolvePriceEntry(
+        assetName: String,
+        assetSymbol: String,
+        assetClass: AssetClass,
+        unit: String,
+        prices: List<CurrentPriceEntity>,
+        priceMap: Map<String, CurrentPriceEntity>
+    ): CurrentPriceEntity? {
+        val holdingInstrumentId = AssetInstrumentMapper.resolveInstrumentId(
+            symbolOrKey = assetSymbol,
+            name = assetName,
+            assetClass = assetClass,
+            unit = unit
+        )
+
+        val stockTicker = if (assetClass == AssetClass.STOCK) {
+            StockInstrumentMapper.resolveStockSymbol(assetSymbol, assetName)
+        } else null
+        val fundTicker = if (assetClass in setOf(AssetClass.EQUITY_FUND, AssetClass.FIXED_INCOME_FUND, AssetClass.GOLD_FUND)) {
+            FundInstrumentMapper.resolveFundSymbol(assetSymbol, assetName)
+        } else null
+
+        return priceMap[assetName]
+            ?: priceMap[assetSymbol]
+            ?: (if (stockTicker != null) priceMap[stockTicker] else null)
+            ?: (if (fundTicker != null) priceMap[fundTicker] else null)
+            ?: (if (holdingInstrumentId != null) priceMap[holdingInstrumentId] else null)
+            ?: prices.firstOrNull { p ->
+                (stockTicker != null && (
+                    p.assetSymbolOrName.equals(stockTicker, ignoreCase = true) ||
+                    p.instrumentId.equals(stockTicker, ignoreCase = true)
+                )) ||
+                (fundTicker != null && (
+                    p.assetSymbolOrName.equals(fundTicker, ignoreCase = true) ||
+                    p.instrumentId.equals(fundTicker, ignoreCase = true)
+                )) ||
+                (holdingInstrumentId != null && p.instrumentId.isNotBlank() && p.instrumentId.equals(holdingInstrumentId, ignoreCase = true)) ||
+                (holdingInstrumentId != null && AssetInstrumentMapper.resolveInstrumentId(p.assetSymbolOrName, p.assetName, p.assetClass, p.unit) == holdingInstrumentId) ||
+                (p.assetClass == assetClass && (
+                    p.assetSymbolOrName.equals(assetName, ignoreCase = true) ||
+                    p.assetSymbolOrName.equals(assetSymbol, ignoreCase = true) ||
+                    p.assetName.equals(assetName, ignoreCase = true)
+                ))
+            }
+    }
+
+    /**
+     * محاسبه اطلاعات جامع یک دارایی برای صفحه جزئیات دارایی و تاریخچه تراکنش‌ها
+     * (پشتیبانی کامل از دارایی‌های فعال و دارایی‌های کاملاً فروخته‌شده)
+     */
+    fun calculateAssetDetail(
+        assetName: String,
+        assetSymbol: String,
+        assetClass: AssetClass,
+        unit: String,
+        transactions: List<TransactionEntity>,
+        prices: List<CurrentPriceEntity>
+    ): AssetDetailSummary {
+        val normalizedTargetName = assetName.trim()
+        val normalizedTargetSymbol = assetSymbol.trim()
+
+        val matchingTxs = transactions.filter { tx ->
+            val txName = tx.assetName.trim()
+            val txSymbol = tx.assetSymbol.trim()
+            val nameMatches = txName.equals(normalizedTargetName, ignoreCase = true) && tx.assetClass == assetClass
+            val symbolMatches = normalizedTargetSymbol.isNotBlank() &&
+                txSymbol.isNotBlank() &&
+                tx.assetClass == assetClass &&
+                txSymbol.equals(normalizedTargetSymbol, ignoreCase = true)
+            nameMatches || symbolMatches
+        }
+
+        val relevantHistory = matchingTxs
+            .filter {
+                it.action == TransactionAction.BUY ||
+                    it.action == TransactionAction.SELL ||
+                    it.action == TransactionAction.DIVIDEND
+            }
+            .sortedWith(compareByDescending<TransactionEntity> { it.timestamp }.thenByDescending { it.id })
+
+        val metrics = if (matchingTxs.isNotEmpty()) {
+            calculateAssetPositionMetrics(normalizedTargetName, matchingTxs)
+        } else {
+            AssetPositionMetrics(
+                assetName = normalizedTargetName,
+                assetSymbol = normalizedTargetSymbol,
+                assetClass = assetClass,
+                unit = unit.ifBlank { assetClass.defaultUnit },
+                quantity = 0.0,
+                remainingCostToman = 0.0,
+                averagePurchasePriceToman = null,
+                hasMissingBuyPrice = false,
+                totalBoughtQuantity = 0.0,
+                totalSoldQuantity = 0.0,
+                totalDividendsToman = 0.0
+            )
+        }
+
+        val effectiveSymbol = metrics.assetSymbol.ifBlank { normalizedTargetSymbol }
+        val effectiveUnit = metrics.unit.ifBlank { unit.ifBlank { assetClass.defaultUnit } }
+        val priceMap = prices.associateBy { it.assetSymbolOrName }
+        val priceEntry = resolvePriceEntry(
+            assetName = normalizedTargetName,
+            assetSymbol = effectiveSymbol,
+            assetClass = assetClass,
+            unit = effectiveUnit,
+            prices = prices,
+            priceMap = priceMap
+        )
+
+        val currentPriceToman = priceEntry?.let {
+            if (it.price > 0.0) PersianUtils.convertCurrency(it.price, it.currency, CurrencyType.TOMAN) else null
+        }
+
+        val isSoldOut = metrics.quantity <= ZERO_QUANTITY_EPSILON
+        val currentValueToman = when {
+            isSoldOut -> 0.0
+            currentPriceToman != null -> currentPriceToman * metrics.quantity
+            else -> null
+        }
+
+        val unrealizedPnLToman = when {
+            isSoldOut -> 0.0
+            currentValueToman != null && !metrics.hasMissingBuyPrice -> currentValueToman - metrics.remainingCostToman
+            else -> null
+        }
+
+        val unrealizedReturnPct = when {
+            isSoldOut -> 0.0
+            unrealizedPnLToman != null && metrics.remainingCostToman > 0.0 -> (unrealizedPnLToman / metrics.remainingCostToman) * 100.0
+            else -> null
+        }
+
+        val avgBuyPrice = metrics.averagePurchasePriceToman
+        val priceGrowthPct = if (!isSoldOut && currentPriceToman != null && avgBuyPrice != null && avgBuyPrice > 0.0) {
+            ((currentPriceToman - avgBuyPrice) / avgBuyPrice) * 100.0
+        } else null
+
+        val isCurrentPriceMissing = currentPriceToman == null
+
+        return AssetDetailSummary(
+            assetName = normalizedTargetName,
+            assetSymbol = effectiveSymbol,
+            assetClass = assetClass,
+            unit = effectiveUnit,
+            currentQuantity = metrics.quantity,
+            isSoldOut = isSoldOut,
+            currentPriceToman = currentPriceToman,
+            currentPriceOriginal = priceEntry?.price,
+            currentPriceCurrency = priceEntry?.currency ?: CurrencyType.TOMAN,
+            currentPriceSource = priceEntry?.source ?: "ورود دستی",
+            currentPriceLastUpdated = priceEntry?.lastUpdated ?: 0L,
+            currentPriceStatus = priceEntry?.status ?: (if (isCurrentPriceMissing) PriceStatus.UNAVAILABLE else PriceStatus.MANUAL),
+            currentPriceErrorMessage = priceEntry?.errorMessage,
+            currentValueToman = currentValueToman,
+            weightedAveragePurchasePriceToman = avgBuyPrice,
+            isPurchasePriceMissing = metrics.hasMissingBuyPrice,
+            remainingCostBasisToman = metrics.remainingCostToman,
+            unrealizedProfitLossToman = unrealizedPnLToman,
+            unrealizedReturnPercent = unrealizedReturnPct,
+            priceGrowthPercent = priceGrowthPct,
+            totalBoughtQuantity = metrics.totalBoughtQuantity,
+            totalSoldQuantity = metrics.totalSoldQuantity,
+            totalDividendsToman = metrics.totalDividendsToman,
+            transactions = relevantHistory
+        )
+    }
+
     /**
      * محاسبه کامل پرتفوی، دارایی‌ها، سود و زیان و بازتنظیم بر اساس تراکنش‌ها
      */
@@ -93,101 +397,35 @@ object CalculationEngine {
         val priceMap = prices.associateBy { it.assetSymbolOrName }
 
         // گروه بندی بر اساس دارایی (بر اساس نام دارایی)
-        val groupedByAsset = transactions.groupBy { it.assetName }
+        val groupedByAsset = transactions
+            .filter { it.assetName.isNotBlank() }
+            .groupBy { it.assetName.trim() }
 
         val rawHoldings = mutableListOf<HoldingItem>()
         var sumPortfolioValue = 0.0
         var sumInvestedCost = 0.0
 
         for ((assetName, txList) in groupedByAsset) {
-            val sampleTx = txList.first()
-            val assetClass = sampleTx.assetClass
-            val assetSymbol = sampleTx.assetSymbol
-            val unit = sampleTx.unit
+            val metrics = calculateAssetPositionMetrics(assetName, txList)
 
-            var totalBuyQty = 0.0
-            var totalSellQty = 0.0
-            var totalBuyCostToman = 0.0
-            var hasMissingBuyPrice = false
+            // دارایی‌هایی که تمام واحدهای آن‌ها فروخته شده است (مانده صفر در تلرانس دقت) از پرتفوی فعال حذف می‌شوند
+            if (metrics.quantity <= ZERO_QUANTITY_EPSILON) continue
 
-            for (tx in txList) {
-                val txCostToman = when {
-                    tx.totalAmount != null -> PersianUtils.convertCurrency(tx.totalAmount, tx.currency, CurrencyType.TOMAN)
-                    tx.unitPrice != null -> PersianUtils.convertCurrency(tx.quantity * tx.unitPrice + tx.fees, tx.currency, CurrencyType.TOMAN)
-                    else -> null
-                }
+            val assetClass = metrics.assetClass
+            val assetSymbol = metrics.assetSymbol
+            val unit = metrics.unit
+            val currentQty = metrics.quantity
+            val avgBuyPriceToman = metrics.averagePurchasePriceToman
+            val holdingCostToman = metrics.remainingCostToman
 
-                when (tx.action) {
-                    TransactionAction.BUY -> {
-                        totalBuyQty += tx.quantity
-                        if (txCostToman != null) {
-                            totalBuyCostToman += txCostToman
-                        } else {
-                            hasMissingBuyPrice = true
-                        }
-                    }
-                    TransactionAction.SELL -> {
-                        totalSellQty += tx.quantity
-                    }
-                    TransactionAction.DIVIDEND,
-                    TransactionAction.DEPOSIT,
-                    TransactionAction.WITHDRAWAL -> {
-                        // handled separately
-                    }
-                }
-            }
-
-            val currentQty = (totalBuyQty - totalSellQty).coerceAtLeast(0.0)
-            if (currentQty <= 0.0 && totalBuyQty == 0.0) continue
-
-            // میانگین قیمت خرید
-            val avgBuyPriceToman = if (totalBuyQty > 0 && !hasMissingBuyPrice) {
-                totalBuyCostToman / totalBuyQty
-            } else null
-
-            val holdingCostToman = if (avgBuyPriceToman != null) {
-                avgBuyPriceToman * currentQty
-            } else {
-                totalBuyCostToman
-            }
-
-            // دریافت قیمت روز با استفاده از نگاشت قطعی سازوکار استاندارد (Deterministic Instrument Mapping)
-            val holdingInstrumentId = AssetInstrumentMapper.resolveInstrumentId(
-                symbolOrKey = assetSymbol,
-                name = assetName,
+            val priceEntry = resolvePriceEntry(
+                assetName = assetName,
+                assetSymbol = assetSymbol,
                 assetClass = assetClass,
-                unit = unit
+                unit = unit,
+                prices = prices,
+                priceMap = priceMap
             )
-
-            val stockTicker = if (assetClass == AssetClass.STOCK) {
-                StockInstrumentMapper.resolveStockSymbol(assetSymbol, assetName)
-            } else null
-            val fundTicker = if (assetClass in setOf(AssetClass.EQUITY_FUND, AssetClass.FIXED_INCOME_FUND, AssetClass.GOLD_FUND)) {
-                FundInstrumentMapper.resolveFundSymbol(assetSymbol, assetName)
-            } else null
-
-            val priceEntry = priceMap[assetName]
-                ?: priceMap[assetSymbol]
-                ?: (if (stockTicker != null) priceMap[stockTicker] else null)
-                ?: (if (fundTicker != null) priceMap[fundTicker] else null)
-                ?: (if (holdingInstrumentId != null) priceMap[holdingInstrumentId] else null)
-                ?: prices.firstOrNull { p ->
-                    (stockTicker != null && (
-                        p.assetSymbolOrName.equals(stockTicker, ignoreCase = true) ||
-                        p.instrumentId.equals(stockTicker, ignoreCase = true)
-                    )) ||
-                    (fundTicker != null && (
-                        p.assetSymbolOrName.equals(fundTicker, ignoreCase = true) ||
-                        p.instrumentId.equals(fundTicker, ignoreCase = true)
-                    )) ||
-                    (holdingInstrumentId != null && p.instrumentId.isNotBlank() && p.instrumentId.equals(holdingInstrumentId, ignoreCase = true)) ||
-                    (holdingInstrumentId != null && AssetInstrumentMapper.resolveInstrumentId(p.assetSymbolOrName, p.assetName, p.assetClass, p.unit) == holdingInstrumentId) ||
-                    (p.assetClass == assetClass && (
-                        p.assetSymbolOrName.equals(assetName, ignoreCase = true) ||
-                        p.assetSymbolOrName.equals(assetSymbol, ignoreCase = true) ||
-                        p.assetName.equals(assetName, ignoreCase = true)
-                    ))
-                }
             val currentPriceToman = priceEntry?.let {
                 if (it.price > 0.0) PersianUtils.convertCurrency(it.price, it.currency, CurrencyType.TOMAN) else null
             }
@@ -213,7 +451,6 @@ object CalculationEngine {
             if (currentValueToman != null) {
                 sumPortfolioValue += currentValueToman
             } else if (holdingCostToman > 0) {
-                // اگر قیمت روز نیست، از بهای تمام‌شده به عنوان ارزش تقریب موقت استفاده نمی‌کنیم مگر به عنوان پایه
                 sumPortfolioValue += holdingCostToman
             }
             sumInvestedCost += holdingCostToman
@@ -235,7 +472,7 @@ object CalculationEngine {
                     returnPercent = returnPct,
                     priceGrowthPercent = priceGrowthPct,
                     portfolioPercent = 0.0, // calculated below
-                    isPurchasePriceMissing = hasMissingBuyPrice,
+                    isPurchasePriceMissing = metrics.hasMissingBuyPrice,
                     isCurrentPriceMissing = isCurrentPriceMissing,
                     currentPriceSource = priceEntry?.source ?: "ورود دستی",
                     currentPriceLastUpdated = priceEntry?.lastUpdated ?: 0L,

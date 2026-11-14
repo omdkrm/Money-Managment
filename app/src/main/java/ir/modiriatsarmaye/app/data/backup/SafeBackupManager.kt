@@ -53,6 +53,18 @@ object SafeBackupManager {
     private const val TAG = "SafeBackupManager"
     const val CURRENT_SCHEMA_VERSION = 2
 
+    private fun optNonBlankString(obj: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            if (obj.has(key) && !obj.isNull(key)) {
+                val raw = obj.opt(key)
+                if (raw is String && raw.isNotBlank() && !raw.equals("null", ignoreCase = true)) {
+                    return raw.trim()
+                }
+            }
+        }
+        return ""
+    }
+
     /**
      * استخراج منعطف و بدون خطای مقدار قیمت از فیلد JSON
      * پشتیبانی کامل از:
@@ -312,7 +324,7 @@ object SafeBackupManager {
                     continue
                 }
 
-                val assetName = obj.optString("assetName", "").trim()
+                val assetName = optNonBlankString(obj, "assetName", "name", "asset_name")
                 if (assetName.isBlank()) {
                     skippedTxCount++
                     warnings.add("تراکنش شماره ${i + 1} به دلیل نام دارایی خالی نادیده گرفته شد.")
@@ -327,21 +339,21 @@ object SafeBackupManager {
                     continue
                 }
 
-                val actionStr = obj.optString("action", "BUY").trim().uppercase(Locale.ROOT)
+                val rawAction = optNonBlankString(obj, "action", "type").ifBlank { "BUY" }.uppercase(Locale.ROOT)
                 val action = TransactionAction.values().firstOrNull {
-                    it.name.equals(actionStr, ignoreCase = true) || it.titleFa == actionStr
+                    it.name.equals(rawAction, ignoreCase = true) || it.titleFa == rawAction
                 } ?: TransactionAction.BUY
 
-                val assetClassStr = obj.optString("assetClass", "GOLD").trim().uppercase(Locale.ROOT)
+                val rawAssetClass = optNonBlankString(obj, "assetClass", "category", "asset_class").ifBlank { "GOLD" }.uppercase(Locale.ROOT)
                 val assetClass = AssetClass.values().firstOrNull {
-                    it.name.equals(assetClassStr, ignoreCase = true) || it.titleFa == assetClassStr
+                    it.name.equals(rawAssetClass, ignoreCase = true) || it.titleFa == rawAssetClass
                 } ?: AssetClass.OTHER
 
-                val unit = obj.optString("unit", assetClass.defaultUnit).ifBlank { assetClass.defaultUnit }
+                val unit = optNonBlankString(obj, "unit").ifBlank { assetClass.defaultUnit }
 
                 // واحد پول سطح تراکنش
                 val (txCurrency, txCurrAmbiguous) = resolveCurrency(
-                    obj.optString("currency", ""),
+                    optNonBlankString(obj, "currency"),
                     CurrencyType.TOMAN,
                     schemaVersion
                 )
@@ -349,8 +361,12 @@ object SafeBackupManager {
                     warnings.add("واحد پول تراکنش «$assetName» مشخص نبود؛ تومان منظور گردید.")
                 }
 
-                // استخراج ایمن قیمت واحد (unitPrice یا price قدیمی)
-                val unitPriceKey = if (obj.has("unitPrice")) "unitPrice" else "price"
+                // استخراج ایمن قیمت واحد (unitPrice، unit_price یا price قدیمی)
+                val unitPriceKey = when {
+                    obj.has("unitPrice") && !obj.isNull("unitPrice") -> "unitPrice"
+                    obj.has("unit_price") && !obj.isNull("unit_price") -> "unit_price"
+                    else -> "price"
+                }
                 val parsedUnitPrice = parseFlexiblePrice(
                     parent = obj,
                     priceKey = unitPriceKey,
@@ -370,9 +386,14 @@ object SafeBackupManager {
                 }
 
                 // استخراج ایمن مبلغ کل
+                val totalAmountKey = when {
+                    obj.has("totalAmount") && !obj.isNull("totalAmount") -> "totalAmount"
+                    obj.has("total_amount") && !obj.isNull("total_amount") -> "total_amount"
+                    else -> "totalAmount"
+                }
                 val parsedTotal = parseFlexiblePrice(
                     parent = obj,
-                    priceKey = "totalAmount",
+                    priceKey = totalAmountKey,
                     defaultCurrency = txCurrency,
                     schemaVersion = schemaVersion,
                     recordContext = "$assetName (مبلغ کل)"
@@ -393,17 +414,16 @@ object SafeBackupManager {
                 )
                 val fees = parsedFees.amount ?: 0.0
 
-                val commTypeStr = obj.optString("commissionType", "FIXED").trim().uppercase(Locale.ROOT)
+                val commTypeStr = optNonBlankString(obj, "commissionType", "commission_type").ifBlank { "FIXED" }.uppercase(Locale.ROOT)
                 val commType = CommissionType.values().firstOrNull {
                     it.name.equals(commTypeStr, ignoreCase = true) || it.titleFa == commTypeStr
                 } ?: CommissionType.FIXED
 
-                val commRateRaw = obj.opt("commissionRate")
+                val commRateRaw = obj.opt("commissionRate") ?: obj.opt("commission_rate")
                 val commissionRate = parseNumericAmount(commRateRaw) ?: fees
 
-                val datePersian = obj.optString("datePersian", PersianUtils.getCurrentPersianDate()).ifBlank {
-                    PersianUtils.getCurrentPersianDate()
-                }
+                val datePersian = optNonBlankString(obj, "datePersian", "date", "date_persian")
+                    .ifBlank { PersianUtils.getCurrentPersianDate() }
                 val timestamp = obj.optLong("timestamp", System.currentTimeMillis())
 
                 validTransactions.add(
@@ -413,7 +433,7 @@ object SafeBackupManager {
                         timestamp = timestamp,
                         assetClass = assetClass,
                         assetName = assetName,
-                        assetSymbol = obj.optString("assetSymbol", ""),
+                        assetSymbol = optNonBlankString(obj, "assetSymbol", "symbol", "ticker", "asset_symbol"),
                         action = action,
                         quantity = quantity,
                         unit = unit,
@@ -423,8 +443,8 @@ object SafeBackupManager {
                         commissionType = commType,
                         commissionRate = commissionRate,
                         totalAmount = finalTotalAmount,
-                        brokerOrSource = obj.optString("brokerOrSource", ""),
-                        notes = obj.optString("notes", "")
+                        brokerOrSource = optNonBlankString(obj, "brokerOrSource", "broker_or_source"),
+                        notes = optNonBlankString(obj, "notes")
                     )
                 )
             }
@@ -444,8 +464,20 @@ object SafeBackupManager {
                     continue
                 }
 
-                val assetSymbolOrName = obj.optString("assetSymbolOrName", "").trim()
-                val assetName = obj.optString("assetName", assetSymbolOrName).trim().ifBlank { assetSymbolOrName }
+                val assetSymbolOrName = optNonBlankString(
+                    obj,
+                    "assetSymbolOrName",
+                    "symbol",
+                    "name",
+                    "assetName",
+                    "asset_name"
+                )
+                val assetName = optNonBlankString(
+                    obj,
+                    "assetName",
+                    "name",
+                    "asset_name"
+                ).ifBlank { assetSymbolOrName }
                 if (assetSymbolOrName.isBlank()) {
                     skippedPriceCount++
                     continue

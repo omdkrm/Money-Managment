@@ -2,7 +2,6 @@ package ir.modiriatsarmaye.app.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import ir.modiriatsarmaye.app.data.cloud.DriveBackupInfo
 import ir.modiriatsarmaye.app.data.market.MarketUpdateReport
 import ir.modiriatsarmaye.app.data.model.*
 import ir.modiriatsarmaye.app.data.repository.ValidationResult
@@ -28,7 +27,6 @@ data class WealthUiState(
     val isAppLocked: Boolean = false,
     val isMarketUpdating: Boolean = false,
     val lastMarketUpdateReport: MarketUpdateReport? = null,
-    val cloudBackupStatus: CloudBackupStatus = CloudBackupStatus.IDLE,
     val userErrorMessage: String? = null,
     val userSuccessMessage: String? = null
 )
@@ -43,7 +41,6 @@ class WealthViewModel(
     private val _isAppLocked = MutableStateFlow(false)
     private val _isMarketUpdating = MutableStateFlow(false)
     private val _lastMarketUpdateReport = MutableStateFlow<MarketUpdateReport?>(null)
-    private val _cloudBackupStatus = MutableStateFlow(CloudBackupStatus.IDLE)
     private val _userErrorMessage = MutableStateFlow<String?>(null)
     private val _userSuccessMessage = MutableStateFlow<String?>(null)
 
@@ -60,7 +57,6 @@ class WealthViewModel(
         _isAppLocked,
         _isMarketUpdating,
         _lastMarketUpdateReport,
-        _cloudBackupStatus,
         _userErrorMessage,
         _userSuccessMessage
     ) { args ->
@@ -81,9 +77,8 @@ class WealthViewModel(
         val isLocked = args[9] as Boolean
         val isUpdating = args[10] as Boolean
         val updateReport = args[11] as MarketUpdateReport?
-        val cloudStatus = args[12] as CloudBackupStatus
-        val errMsg = args[13] as String?
-        val succMsg = args[14] as String?
+        val errMsg = args[12] as String?
+        val succMsg = args[13] as String?
 
         // محاسبه وضعیت پرتفوی به صورت خودکار و واکنشی
         val portfolio = CalculationEngine.calculatePortfolio(transactions, prices, settings, liabilities)
@@ -147,7 +142,6 @@ class WealthViewModel(
             isAppLocked = isLocked,
             isMarketUpdating = isUpdating,
             lastMarketUpdateReport = updateReport,
-            cloudBackupStatus = cloudStatus,
             userErrorMessage = errMsg,
             userSuccessMessage = succMsg
         )
@@ -396,89 +390,6 @@ class WealthViewModel(
                 _userErrorMessage.value = "خطا در تغییر نماد: ${e.localizedMessage}"
             } finally {
                 _isMarketUpdating.value = false
-            }
-        }
-    }
-
-    /**
-     * اتصال حساب Google
-     */
-    fun connectGoogleAccount(email: String, displayName: String, accessToken: String? = null, onComplete: ((Boolean, String?) -> Unit)? = null) {
-        viewModelScope.launch {
-            when (val res = repository.connectGoogleAccount(email, displayName, accessToken)) {
-                is ValidationResult.Success -> {
-                    _cloudBackupStatus.value = CloudBackupStatus.IDLE
-                    _userSuccessMessage.value = "حساب Google ($email) با موفقیت متصل گردید."
-                    onComplete?.invoke(true, null)
-                }
-                is ValidationResult.Error -> {
-                    _userErrorMessage.value = res.message
-                    onComplete?.invoke(false, res.message)
-                }
-            }
-        }
-    }
-
-    /**
-     * قطع اتصال حساب Google
-     */
-    fun disconnectGoogleAccount() {
-        viewModelScope.launch {
-            repository.disconnectGoogleAccount()
-            _cloudBackupStatus.value = CloudBackupStatus.DISCONNECTED
-            _userSuccessMessage.value = "اتصال حساب Google با موفقیت قطع گردید."
-        }
-    }
-
-    /**
-     * پشتیبان‌گیری در Google Drive
-     */
-    fun performGoogleDriveBackup() {
-        viewModelScope.launch {
-            _cloudBackupStatus.value = CloudBackupStatus.SYNCING
-            val result = repository.performGoogleDriveBackup()
-            if (result.isSuccess) {
-                _cloudBackupStatus.value = CloudBackupStatus.SUCCESS
-                _userSuccessMessage.value = "نسخه پشتیبان با موفقیت در Google Drive ذخیره شد."
-            } else {
-                _cloudBackupStatus.value = CloudBackupStatus.ERROR
-                _userErrorMessage.value = result.exceptionOrNull()?.message ?: "خطا در پشتیبان‌گیری در Google Drive"
-            }
-        }
-    }
-
-    /**
-     * پیش‌نمایش فایل پشتیبان Google Drive قبل از اعمال
-     */
-    fun getGoogleDriveBackupPreview(onResult: (DriveBackupInfo?) -> Unit) {
-        viewModelScope.launch {
-            val result = repository.fetchGoogleDriveBackup()
-            if (result.isSuccess) {
-                onResult(result.getOrNull())
-            } else {
-                _userErrorMessage.value = result.exceptionOrNull()?.message ?: "امکان خواندن پشتیبان ابری وجود ندارد."
-                onResult(null)
-            }
-        }
-    }
-
-    /**
-     * بازیابی از Google Drive پس از تأیید کاربر با انتخاب جایگزینی یا ادغام
-     */
-    fun restoreFromGoogleDrive(replaceExisting: Boolean = true, onComplete: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            _cloudBackupStatus.value = CloudBackupStatus.RESTORING
-            when (val res = repository.restoreFromGoogleDrive(replaceExisting = replaceExisting)) {
-                is ValidationResult.Success -> {
-                    _cloudBackupStatus.value = CloudBackupStatus.IDLE
-                    _userSuccessMessage.value = res.message
-                    onComplete(true, null)
-                }
-                is ValidationResult.Error -> {
-                    _cloudBackupStatus.value = CloudBackupStatus.ERROR
-                    _userErrorMessage.value = res.message
-                    onComplete(false, res.message)
-                }
             }
         }
     }

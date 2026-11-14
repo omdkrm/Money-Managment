@@ -70,18 +70,15 @@ fun DashboardScreen(
                     )
                 }
 
-                IconButton(
+                AppIconActionButton(
+                    icon = if (hideAmounts) AppIcons.VisibilityOff else AppIcons.Visibility,
+                    contentDescription = "مخفی‌سازی مبالغ",
                     onClick = { hideAmounts = !hideAmounts },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Icon(
-                        imageVector = if (hideAmounts) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = "مخفی‌سازی مبالغ",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                )
             }
         }
 
@@ -182,7 +179,7 @@ fun DashboardScreen(
                     title = "دارایی خالص (Net Worth)",
                     value = if (hideAmounts) "••••••" else PersianUtils.formatMoney(summary.netWorthToman, settings.displayCurrency),
                     subtitle = if (summary.totalLiabilitiesToman > 0) "بدهی: ${PersianUtils.formatMoney(summary.totalLiabilitiesToman, settings.displayCurrency)}" else "بدون بدهی ثبت‌شده",
-                    icon = Icons.Default.AccountBalance,
+                    icon = AppIcons.AccountBalance,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -190,7 +187,7 @@ fun DashboardScreen(
                     title = "سرمایه‌گذاری ماهانه",
                     value = if (hideAmounts) "••••••" else PersianUtils.formatMoney(settings.monthlyInvestmentToman, settings.displayCurrency),
                     subtitle = "افزایش سالانه: ${PersianUtils.toPersianDigits(settings.annualInvestmentIncreasePct.toInt().toString())}٪",
-                    icon = Icons.Default.Savings,
+                    icon = AppIcons.Savings,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -241,7 +238,7 @@ fun DashboardScreen(
                             )
                         }
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                            imageVector = AppIcons.ArrowForwardIos,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.size(16.dp)
@@ -270,16 +267,14 @@ fun DashboardScreen(
                         Text(
                             text = "ترکیب سبد دارایی‌ها",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
                         )
-                        TextButton(
+                        AppTextButton(
+                            text = "مشاهده همه دارایی‌ها",
                             onClick = onNavigateToPortfolio,
-                            modifier = Modifier
-                                .defaultMinSize(minHeight = 48.dp)
-                                .testTag("view_all_holdings_btn")
-                        ) {
-                            Text("مشاهده همه دارایی‌ها")
-                        }
+                            modifier = Modifier.testTag("view_all_holdings_btn")
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -307,7 +302,7 @@ fun DashboardScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.PieChart,
+                                    imageVector = AppIcons.PieChart,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                     modifier = Modifier.size(36.dp)
@@ -437,7 +432,7 @@ fun DashboardScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.Timeline,
+                                imageVector = AppIcons.Timeline,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary
                             )
@@ -449,7 +444,7 @@ fun DashboardScreen(
                             )
                         }
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                            imageVector = AppIcons.ArrowForwardIos,
                             contentDescription = null,
                             modifier = Modifier.size(14.dp)
                         )
@@ -504,11 +499,13 @@ fun DashboardScreen(
                 Text(
                     text = "آخرین تراکنش‌ها",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onNavigateToTransactions) {
-                    Text("مشاهده همه (${PersianUtils.toPersianDigits(uiState.transactions.size.toString())})")
-                }
+                AppTextButton(
+                    text = "مشاهده همه (${PersianUtils.toPersianDigits(uiState.transactions.size.toString())})",
+                    onClick = onNavigateToTransactions
+                )
             }
         }
 

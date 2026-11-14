@@ -2,9 +2,6 @@ package ir.modiriatsarmaye.app.data.repository
 
 import android.content.Context
 import android.util.Log
-import ir.modiriatsarmaye.app.data.cloud.DriveBackupInfo
-import ir.modiriatsarmaye.app.data.cloud.GoogleAccountInfo
-import ir.modiriatsarmaye.app.data.cloud.GoogleDriveBackupManager
 import ir.modiriatsarmaye.app.data.local.*
 import ir.modiriatsarmaye.app.data.market.AssetInstrumentMapper
 import ir.modiriatsarmaye.app.data.market.CompositeMarketDataProvider
@@ -42,12 +39,11 @@ class WealthRepository(
     private val dividendDao = database.dividendDao()
     private val settingsDao = database.settingsDao()
 
-    private val driveBackupManager = context?.let { GoogleDriveBackupManager(it) }
-
-    init {
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            SafeDataCleanup.cleanupKnownSampleData(database)
-        }
+    /**
+     * اجرای کنترل‌شده و صریح عملیات پاکسازی نمونه‌های آزمایشی در صورت نیاز (caller-owned lifecycle)
+     */
+    suspend fun performMaintenanceCleanup() {
+        SafeDataCleanup.cleanupKnownSampleData(database)
     }
 
     val allTransactionsFlow: Flow<List<TransactionEntity>> = transactionDao.getAllTransactionsFlow()
@@ -91,7 +87,7 @@ class WealthRepository(
             val totalSold = assetTxs.filter { it.action == TransactionAction.SELL }.sumOf { it.quantity }
             val currentHolding = (totalBought - totalSold).coerceAtLeast(0.0)
 
-            if (transaction.quantity > currentHolding) {
+            if (transaction.quantity > currentHolding + CalculationEngine.ZERO_QUANTITY_EPSILON) {
                 return ValidationResult.Error(
                     "تعداد قابل فروش کافی نیست. موجودی فعلی دارایی: ${PersianUtils.formatNumber(currentHolding)} ${transaction.unit}"
                 )
@@ -998,86 +994,6 @@ class WealthRepository(
             Log.e(TAG, "Failed to correct asset ticker for $oldSymbolOrName -> $resolvedTicker", e)
             return Result.failure(e)
         }
-    }
-
-    /**
-     * اتصال حساب Google جهت پشتیبان‌گیری ابری
-     */
-    suspend fun connectGoogleAccount(email: String, displayName: String, accessToken: String? = null): ValidationResult {
-        if (email.isBlank() || !email.contains("@")) {
-            return ValidationResult.Error("آدرس ایمیل گوگل نامعتبر است.")
-        }
-        driveBackupManager?.saveOAuthCredentials(email, displayName, accessToken)
-        val currentSettings = getSettings()
-        val updated = currentSettings.copy(
-            googleAccountEmail = email.trim(),
-            googleAccountName = displayName.trim()
-        )
-        return saveSettings(updated)
-    }
-
-    /**
-     * قطع اتصال حساب Google و پاکسازی نشست ابری محلی
-     */
-    suspend fun disconnectGoogleAccount(): ValidationResult {
-        driveBackupManager?.clearCloudSession()
-        val currentSettings = getSettings()
-        val updated = currentSettings.copy(
-            googleAccountEmail = null,
-            googleAccountName = null,
-            lastGoogleDriveBackupTimestamp = null,
-            lastGoogleDriveBackupSummary = null
-        )
-        return saveSettings(updated)
-    }
-
-    /**
-     * انجام پشتیبان‌گیری در Google Drive
-     */
-    suspend fun performGoogleDriveBackup(): Result<DriveBackupInfo> {
-        val manager = driveBackupManager ?: return Result.failure(Exception("مدیریت Google Drive در دسترس نیست."))
-        val settings = getSettings()
-        val email = settings.googleAccountEmail ?: return Result.failure(Exception("برای پشتیبانگیری ابری ابتدا حساب Google را متصل کنید."))
-
-        val backupJson = exportBackupJson()
-        val backupResult = manager.uploadBackupToDrive(backupJson, email)
-
-        if (backupResult.isSuccess) {
-            val info = backupResult.getOrThrow()
-            val summary = "${info.transactionsCount} تراکنش • ${PersianUtils.toPersianDigits((info.sizeBytes / 1024).toString())} کیلوبایت"
-            saveSettings(
-                settings.copy(
-                    lastGoogleDriveBackupTimestamp = info.timestamp,
-                    lastGoogleDriveBackupSummary = summary
-                )
-            )
-        }
-
-        return backupResult
-    }
-
-    /**
-     * دریافت آخرین وضعیت پشتیبان ذخیره‌شده در Google Drive
-     */
-    suspend fun fetchGoogleDriveBackup(): Result<DriveBackupInfo> {
-        val manager = driveBackupManager ?: return Result.failure(Exception("مدیریت Google Drive در دسترس نیست."))
-        val settings = getSettings()
-        val email = settings.googleAccountEmail ?: return Result.failure(Exception("برای پشتیبانگیری ابری ابتدا حساب Google را متصل کنید."))
-
-        return manager.downloadBackupFromDrive(email)
-    }
-
-    /**
-     * بازیابی اطلاعات از Google Drive با اعتبارسنجی و انتخاب حالت جایگزینی یا ادغام
-     */
-    suspend fun restoreFromGoogleDrive(replaceExisting: Boolean = true): ValidationResult {
-        val fetchResult = fetchGoogleDriveBackup()
-        if (fetchResult.isFailure) {
-            return ValidationResult.Error(fetchResult.exceptionOrNull()?.message ?: "خطا در دریافت پشتیبان Google Drive")
-        }
-
-        val info = fetchResult.getOrThrow()
-        return restoreBackupJson(info.rawJson, replaceExisting = replaceExisting)
     }
 
     /**

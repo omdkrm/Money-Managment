@@ -16,13 +16,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ir.modiriatsarmaye.app.data.model.*
-import ir.modiriatsarmaye.app.ui.components.PersianDatePickerDialog
-import ir.modiriatsarmaye.app.ui.components.StatusBadge
+import ir.modiriatsarmaye.app.ui.components.*
 import ir.modiriatsarmaye.app.ui.theme.ProfitGreen
 import ir.modiriatsarmaye.app.util.JalaliDate
 import ir.modiriatsarmaye.app.util.PersianUtils
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AddTransactionSheet(
     initialTransaction: TransactionEntity? = null,
@@ -134,13 +133,16 @@ fun AddTransactionSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (initialTransaction == null) "ثبت تراکنش جدید" else "ویرایش تراکنش",
+                    text = if (initialTransaction == null || initialTransaction.id == 0L) "ثبت تراکنش جدید" else "ویرایش تراکنش",
                     style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = onDismiss) {
-                    Icon(imageVector = Icons.Default.Close, contentDescription = "بستن")
-                }
+                AppIconActionButton(
+                    icon = Icons.Default.Close,
+                    contentDescription = "بستن",
+                    onClick = onDismiss
+                )
             }
 
             if (errorMessage != null) {
@@ -201,15 +203,23 @@ fun AddTransactionSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            // پیشنهادات سریع
-            Row(
+            // پیشنهادات سریع با چیدمان ریسپانسیو FlowRow
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 assetSuggestions.take(4).forEach { suggestion ->
                     SuggestionChip(
                         onClick = { assetName = suggestion },
-                        label = { Text(suggestion, fontSize = 11.sp) }
+                        shape = AppButtonDefaults.Shape,
+                        label = {
+                            Text(
+                                text = suggestion,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        },
+                        modifier = Modifier.defaultMinSize(minHeight = AppButtonDefaults.StandardHeight)
                     )
                 }
             }
@@ -267,15 +277,20 @@ fun AddTransactionSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Max),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 TransactionAction.entries.take(3).forEach { act ->
-                    FilterChip(
+                    AppFilterChip(
                         selected = selectedAction == act,
                         onClick = { selectedAction = act },
-                        label = { Text(act.titleFa) },
-                        modifier = Modifier.weight(1f)
+                        label = act.titleFa,
+                        centerLabel = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
                 }
             }
@@ -348,17 +363,22 @@ fun AddTransactionSheet(
                         .testTag("unit_price_input")
                 )
 
-                Column(modifier = Modifier.weight(1f)) {
-                    FilterChip(
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AppFilterChip(
                         selected = selectedCurrency == CurrencyType.TOMAN,
                         onClick = { selectedCurrency = CurrencyType.TOMAN },
-                        label = { Text("تومان") },
+                        label = "تومان",
+                        centerLabel = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    FilterChip(
+                    AppFilterChip(
                         selected = selectedCurrency == CurrencyType.RIAL,
                         onClick = { selectedCurrency = CurrencyType.RIAL },
-                        label = { Text("ریال") },
+                        label = "ریال",
+                        centerLabel = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -382,20 +402,30 @@ fun AddTransactionSheet(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Max),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    FilterChip(
+                    AppFilterChip(
                         selected = selectedCommissionType == CommissionType.PERCENTAGE,
                         onClick = { selectedCommissionType = CommissionType.PERCENTAGE },
-                        label = { Text("درصدی (٪)") },
-                        modifier = Modifier.weight(1f).testTag("commission_type_percentage")
+                        label = "درصدی (٪)",
+                        centerLabel = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .testTag("commission_type_percentage")
                     )
-                    FilterChip(
+                    AppFilterChip(
                         selected = selectedCommissionType == CommissionType.FIXED,
                         onClick = { selectedCommissionType = CommissionType.FIXED },
-                        label = { Text("مبلغ ثابت") },
-                        modifier = Modifier.weight(1f).testTag("commission_type_fixed")
+                        label = "مبلغ ثابت",
+                        centerLabel = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .testTag("commission_type_fixed")
                     )
                 }
 
@@ -462,13 +492,12 @@ fun AddTransactionSheet(
                         enabled = false,
                         label = { Text("تاریخ تراکنش (شمسی) *") },
                         trailingIcon = {
-                            IconButton(onClick = { showDatePickerDialog = true }) {
-                                Icon(
-                                    imageVector = Icons.Default.DateRange,
-                                    contentDescription = "انتخاب تاریخ از تقویم شمسی",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                            AppIconActionButton(
+                                icon = Icons.Default.DateRange,
+                                contentDescription = "انتخاب تاریخ از تقویم شمسی",
+                                tint = MaterialTheme.colorScheme.primary,
+                                onClick = { showDatePickerDialog = true }
+                            )
                         },
                         colors = OutlinedTextFieldDefaults.colors(
                             disabledTextColor = MaterialTheme.colorScheme.onSurface,
@@ -609,30 +638,32 @@ fun AddTransactionSheet(
             Spacer(modifier = Modifier.height(20.dp))
 
             // دکمه ثبت تراکنش
-            Button(
+            AppPrimaryButton(
+                text = if (initialTransaction == null || initialTransaction.id == 0L) "ثبت نهایی تراکنش" else "ذخیره تغییرات",
+                icon = Icons.Default.Check,
                 onClick = {
                     val parsedQuantity = quantityText.toDoubleOrNull()
                     if (assetName.isBlank()) {
                         errorMessage = "لطفاً نام دارایی را وارد کنید."
-                        return@Button
+                        return@AppPrimaryButton
                     }
                     if (parsedQuantity == null || parsedQuantity <= 0.0) {
                         errorMessage = "مقدار / تعداد باید عددی بزرگتر از صفر باشد."
-                        return@Button
+                        return@AppPrimaryButton
                     }
                     if (unit.isBlank()) {
                         errorMessage = "واحد سنجش را مشخص کنید."
-                        return@Button
+                        return@AppPrimaryButton
                     }
 
                     val comm = commissionInputText.toDoubleOrNull()
                     if (comm == null || comm < 0.0) {
                         errorMessage = "کارمزد نمی‌تواند منفی یا نامعتبر باشد."
-                        return@Button
+                        return@AppPrimaryButton
                     }
                     if (selectedCommissionType == CommissionType.PERCENTAGE && comm > 100.0) {
                         errorMessage = "درصد کارمزد باید بین ۰ تا ۱۰۰ درصد باشد."
-                        return@Button
+                        return@AppPrimaryButton
                     }
 
                     val parsedPrice = unitPriceText.toDoubleOrNull()
@@ -669,18 +700,8 @@ fun AddTransactionSheet(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
-                    .testTag("submit_transaction_button"),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (initialTransaction == null) "ثبت نهایی تراکنش" else "ذخیره تغییرات",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                    .testTag("submit_transaction_button")
+            )
         }
     }
 }

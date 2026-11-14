@@ -3,6 +3,7 @@ package ir.modiriatsarmaye.app.data.market
 import ir.modiriatsarmaye.app.data.model.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.OkHttpClient
 
 data class MarketUpdateReport(
     val updatedCount: Int,
@@ -34,6 +35,12 @@ class CompositeMarketDataProvider(
     val fundProvider: FundMarketPriceProvider = FundMarketPriceProvider(),
     val providers: List<MarketDataProvider> = listOf(goldProvider, stockProvider, fundProvider)
 ) {
+    constructor(client: OkHttpClient) : this(
+        goldProvider = GoldPriceProvider(client),
+        stockProvider = StockPriceProvider(client),
+        fundProvider = FundMarketPriceProvider(client)
+    )
+
     constructor(providers: List<MarketDataProvider>) : this(
         goldProvider = providers.filterIsInstance<GoldPriceProvider>().firstOrNull() ?: GoldPriceProvider(),
         stockProvider = providers.filterIsInstance<StockMarketPriceProvider>().firstOrNull() ?: StockMarketPriceProvider(),

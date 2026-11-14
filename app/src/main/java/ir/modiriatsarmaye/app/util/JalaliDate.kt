@@ -113,12 +113,15 @@ data class JalaliDate(
         val PERSIAN_WEEK_DAYS_SHORT = listOf("ش", "ی", "د", "س", "چ", "پ", "ج")
 
         /**
-         * بررسی سال کبیسه شمسی (الگوریتم ۳۳ ساله خیامی/بیرشک)
+         * بررسی سال کبیسه شمسی بر اساس الگوریتم ریاضی تقویم جلالی (Kazimierz M. Borkowski)
+         * کاملاً منطبق بر محاسبات چرخه روزها و تبدیل تقویم‌های شمسی و میلادی
          */
         fun isLeapYear(year: Int): Boolean {
-            // چرخه ۳۳ ساله: باقیمانده‌های مشخص سال کبیسه هستند
-            val rem = ((year + 38) * 31) % 128
-            return rem < 31
+            val y1 = year - 979
+            val y2 = y1 + 1
+            val daysY1 = (y1 / 33) * 8 + ((y1 % 33) + 3) / 4
+            val daysY2 = (y2 / 33) * 8 + ((y2 % 33) + 3) / 4
+            return (daysY2 - daysY1) == 1
         }
 
         /**

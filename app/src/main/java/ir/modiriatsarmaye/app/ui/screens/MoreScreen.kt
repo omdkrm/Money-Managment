@@ -43,14 +43,17 @@ fun MoreScreen(
     onSaveSettings: (AppSettingsEntity) -> Unit,
     onExportBackup: suspend () -> String,
     onRestoreBackup: (String, Boolean) -> Unit,
-    onResetDatabase: () -> Unit,
-    onSyncMarketPrices: () -> Unit
+    @Suppress("UNUSED_PARAMETER") onResetDatabase: () -> Unit = {},
+    onSyncMarketPrices: () -> Unit,
+    onSetOrChangePin: (currentPin: String?, newPin: String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, _, cb -> cb(false, null) },
+    onDisablePin: (currentPin: String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, cb -> cb(false, null) },
+    onToggleBiometric: (Boolean) -> Unit = {},
+    onLockAppNow: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val settings = uiState.settings
     val scope = rememberCoroutineScope()
 
-    var showResetConfirmDialog by remember { mutableStateOf(false) }
     var showSettingsEditorDialog by remember { mutableStateOf(false) }
 
     // بازخورد عملیات پشتیبان‌گیری فایلی
@@ -198,21 +201,6 @@ fun MoreScreen(
                     )
                 }
             }
-        )
-    }
-
-    // دیالوگ بازنشانی به مقادیر اولیه
-    if (showResetConfirmDialog) {
-        ConfirmationDialog(
-            title = "بازنشانی داده‌ها به حالت اولیه",
-            message = "آیا از بازنشانی کلیه داده‌ها و تراکنش‌ها به نمونه‌های پیش‌فرض اولیه اطمینان دارید؟ کلیه تراکنش‌های دستی جدید حذف خواهند شد.",
-            confirmButtonText = "بازنشانی داده‌ها",
-            isDestructive = true,
-            onConfirm = {
-                onResetDatabase()
-                showResetConfirmDialog = false
-            },
-            onDismiss = { showResetConfirmDialog = false }
         )
     }
 
@@ -381,6 +369,17 @@ fun MoreScreen(
             }
         }
 
+        // بخش امنیت و رمز ورود (PIN)
+        item {
+            PinSecuritySection(
+                settings = settings,
+                onSetOrChangePin = onSetOrChangePin,
+                onDisablePin = onDisablePin,
+                onToggleBiometric = onToggleBiometric,
+                onLockAppNow = onLockAppNow
+            )
+        }
+
         // بخش ۴: پشتیبان‌گیری محلی در فایل (آفلاین با استاندارد SAF)
         item {
             Card(
@@ -464,15 +463,6 @@ fun MoreScreen(
                                 modifier = itemModifier.testTag("restore_file_backup_btn")
                             )
                         }
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    AppTextButton(
-                        text = "بازنشانی پایگاه داده به مقادیر پیش‌فرض اولیه",
-                        onClick = { showResetConfirmDialog = true },
-                        contentColor = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }

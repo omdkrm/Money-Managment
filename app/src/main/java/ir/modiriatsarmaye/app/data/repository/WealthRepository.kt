@@ -10,8 +10,15 @@ import ir.modiriatsarmaye.app.data.market.MarketUpdateReport
 import ir.modiriatsarmaye.app.data.market.StockInstrumentMapper
 import ir.modiriatsarmaye.app.data.market.StrategyDiagnostic
 import ir.modiriatsarmaye.app.data.model.*
+import ir.modiriatsarmaye.app.security.KeyHealthStatus
+import ir.modiriatsarmaye.app.security.Pbkdf2PinHasher
+import ir.modiriatsarmaye.app.security.PinMigrationResult
+import ir.modiriatsarmaye.app.security.PinMutationResult
+import ir.modiriatsarmaye.app.security.PinSecurityManager
+import ir.modiriatsarmaye.app.security.PinVerificationResult
 import ir.modiriatsarmaye.app.util.CalculationEngine
 import ir.modiriatsarmaye.app.util.PersianUtils
+import java.security.MessageDigest
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
@@ -30,7 +37,8 @@ sealed class ValidationResult {
 class WealthRepository(
     private val database: AppDatabase,
     context: Context? = null,
-    private val marketDataProvider: CompositeMarketDataProvider = CompositeMarketDataProvider()
+    private val marketDataProvider: CompositeMarketDataProvider = CompositeMarketDataProvider(),
+    private val pinSecurityManager: PinSecurityManager? = context?.let { PinSecurityManager.createDefault(it) }
 ) {
     private val transactionDao = database.transactionDao()
     private val currentPriceDao = database.currentPriceDao()
@@ -205,19 +213,190 @@ class WealthRepository(
         dividendDao.deleteDividend(dividend)
     }
 
-    // --- تنظیمات برنامه ---
+    // --- تنظیمات برنامه و امنیت PIN ---
     suspend fun saveSettings(settings: AppSettingsEntity): ValidationResult {
         val targetTotal = settings.targetGoldPct + settings.targetEquityFundPct +
                 settings.targetFixedIncomePct + settings.targetUsdPct + settings.targetCashPct
         if (kotlin.math.abs(targetTotal - 100.0) > 0.01) {
             return ValidationResult.Error("مجموع درصدهای تخصیص هدف باید دقیقاً برابر ۱۰۰٪ باشد (مجموع فعلی: $targetTotal٪).")
         }
-        settingsDao.saveSettings(settings)
+        val existing = settingsDao.getSettingsDirect()
+        val preservedLegacyPin = if (pinSecurityManager?.hasSecurePin() == true) "" else (existing?.pinCode ?: "")
+        settingsDao.saveSettings(settings.copy(pinCode = preservedLegacyPin))
         return ValidationResult.Success
     }
 
     suspend fun getSettings(): AppSettingsEntity {
         return settingsDao.getSettings() ?: AppSettingsEntity()
+    }
+
+    suspend fun migrateLegacyPinIfNeeded(): PinMigrationResult {
+        val manager = pinSecurityManager ?: return PinMigrationResult.NotNeeded
+        return manager.migrateLegacyPinIfNeeded(settingsDao)
+    }
+
+    fun hasSecurePin(): Boolean = pinSecurityManager?.hasSecurePin() == true
+
+    fun checkKeystoreHealth(): KeyHealthStatus =
+        pinSecurityManager?.checkKeystoreHealth() ?: KeyHealthStatus.NOT_CREATED
+
+    fun isKeystorePermanentlyUnavailable(): Boolean =
+        pinSecurityManager?.isKeystorePermanentlyUnavailable() == true
+
+    suspend fun verifyPin(candidatePin: String): PinVerificationResult {
+        val manager = pinSecurityManager ?: return PinVerificationResult.KeystoreError(
+            isPermanent = false,
+            message = "سرویس امنیت رمز ورود مقداردهی نشده است."
+        )
+        return manager.verifyPin(candidatePin)
+    }
+
+    suspend fun setOrChangePin(currentPin: String?, newPin: String): PinMutationResult {
+        val manager = pinSecurityManager ?: return PinMutationResult.KeystoreError(
+            isPermanent = false,
+            message = "سرویس امنیت رمز ورود مقداردهی نشده است."
+        )
+        if (Pbkdf2PinHasher.validateNewPinFormat(newPin) == null) {
+            return PinMutationResult.ValidationError("رمز ورود باید بین ۴ تا ۸ رقم عددی باشد.")
+        }
+
+        val currentSettings = settingsDao.getSettingsDirect() ?: InitialData.defaultSettings()
+        if (currentSettings.isPinEnabled) {
+            val normalizedCandidate = Pbkdf2PinHasher.normalizeDigits(currentPin ?: "")
+            if (normalizedCandidate.isBlank()) {
+                return if (!manager.hasSecurePin() && currentSettings.pinCode.isBlank()) {
+                    PinMutationResult.KeystoreError(
+                        isPermanent = true,
+                        message = "رکورد رمز امن قبلی در دستگاه یافت نشد. لطفاً از مسیر بازیابی با احراز هویت دستگاه استفاده کنید."
+                    )
+                } else {
+                    PinMutationResult.ValidationError("رمز ورود فعلی اشتباه است.")
+                }
+            }
+
+            if (manager.hasSecurePin()) {
+                when (val check = manager.verifyPin(normalizedCandidate)) {
+                    is PinVerificationResult.Success -> Unit
+                    is PinVerificationResult.InvalidPin -> {
+                        return PinMutationResult.ValidationError("رمز ورود فعلی اشتباه است.")
+                    }
+                    is PinVerificationResult.NoSecurePinConfigured -> {
+                        return PinMutationResult.KeystoreError(
+                            isPermanent = true,
+                            message = "رمز قبلی یافت نشد. لطفاً ابتدا قفل را بازیابی کنید."
+                        )
+                    }
+                    is PinVerificationResult.KeystoreError -> {
+                        return PinMutationResult.KeystoreError(
+                            isPermanent = check.isPermanent,
+                            message = check.message
+                        )
+                    }
+                }
+            } else if (currentSettings.pinCode.isNotBlank()) {
+                val normalizedLegacy = Pbkdf2PinHasher.normalizeDigits(currentSettings.pinCode)
+                val legacyBytes = normalizedLegacy.toByteArray(Charsets.UTF_8)
+                val candidateBytes = normalizedCandidate.toByteArray(Charsets.UTF_8)
+                val matchesLegacy = legacyBytes.size == candidateBytes.size &&
+                    MessageDigest.isEqual(legacyBytes, candidateBytes)
+                legacyBytes.fill(0)
+                candidateBytes.fill(0)
+
+                if (!matchesLegacy) {
+                    return PinMutationResult.ValidationError("رمز ورود فعلی اشتباه است.")
+                }
+
+                when (val migRes = manager.migrateLegacyPinIfNeeded(settingsDao)) {
+                    is PinMigrationResult.MigratedAndVerified,
+                    is PinMigrationResult.NotNeeded -> Unit
+                    is PinMigrationResult.FailedPreservedLegacy -> {
+                        return PinMutationResult.KeystoreError(
+                            isPermanent = migRes.isPermanentKeystoreFailure,
+                            message = migRes.message
+                        )
+                    }
+                }
+            } else {
+                // isPinEnabled == true ولی نه رکورد امن وجود دارد و نه رمز قدیمی؛ تغییر مستقیم بدون بازیابی ممنوع است
+                return PinMutationResult.KeystoreError(
+                    isPermanent = true,
+                    message = "رکورد رمز امن قبلی در دستگاه یافت نشد. لطفاً از مسیر بازیابی با احراز هویت دستگاه استفاده کنید."
+                )
+            }
+        }
+
+        val mutationResult = manager.setPin(newPin)
+        if (mutationResult is PinMutationResult.Success) {
+            val fresh = settingsDao.getSettingsDirect() ?: InitialData.defaultSettings()
+            settingsDao.saveSettings(fresh.copy(pinCode = "", isPinEnabled = true))
+        }
+        return mutationResult
+    }
+
+    suspend fun disablePin(currentPin: String): PinMutationResult {
+        val manager = pinSecurityManager ?: return PinMutationResult.KeystoreError(
+            isPermanent = false,
+            message = "سرویس امنیت رمز ورود مقداردهی نشده است."
+        )
+        if (Pbkdf2PinHasher.normalizeDigits(currentPin).isBlank()) {
+            return PinMutationResult.ValidationError("رمز ورود فعلی اشتباه است.")
+        }
+        when (val check = manager.verifyPin(currentPin)) {
+            is PinVerificationResult.Success -> Unit
+            is PinVerificationResult.InvalidPin -> {
+                return PinMutationResult.ValidationError("رمز ورود فعلی اشتباه است.")
+            }
+            is PinVerificationResult.NoSecurePinConfigured -> {
+                return PinMutationResult.KeystoreError(
+                    isPermanent = true,
+                    message = "رکورد رمز امن در دستگاه یافت نشد."
+                )
+            }
+            is PinVerificationResult.KeystoreError -> {
+                return PinMutationResult.KeystoreError(
+                    isPermanent = check.isPermanent,
+                    message = check.message
+                )
+            }
+        }
+
+        val fresh = settingsDao.getSettingsDirect() ?: InitialData.defaultSettings()
+        settingsDao.saveSettings(fresh.copy(pinCode = "", isPinEnabled = false, isBiometricEnabled = false))
+        manager.clearPinRecordAndKey()
+        return PinMutationResult.Success
+    }
+
+    suspend fun setBiometricEnabled(enabled: Boolean): ValidationResult {
+        val fresh = settingsDao.getSettingsDirect() ?: InitialData.defaultSettings()
+        if (enabled && !fresh.isPinEnabled) {
+            return ValidationResult.Error("برای فعال‌سازی ورود با اثر انگشت/چهره، ابتدا رمز ورود (PIN) را فعال کنید.")
+        }
+        settingsDao.saveSettings(fresh.copy(isBiometricEnabled = enabled))
+        return ValidationResult.Success
+    }
+
+    suspend fun resetPinGateAfterConfirmedRecovery(
+        isDeviceAuthenticated: Boolean,
+        isUserConfirmed: Boolean
+    ): ValidationResult {
+        if (!isDeviceAuthenticated) {
+            return ValidationResult.Error("ابتدا احراز هویت دستگاه باید با موفقیت انجام شود.")
+        }
+        if (!isUserConfirmed) {
+            return ValidationResult.Error("بازنشانی قفل PIN بدون تایید صریح کاربر مجاز نیست.")
+        }
+        val fresh = settingsDao.getSettingsDirect() ?: InitialData.defaultSettings()
+        settingsDao.saveSettings(
+            fresh.copy(
+                pinCode = "",
+                isPinEnabled = false,
+                isBiometricEnabled = false
+            )
+        )
+        pinSecurityManager?.clearPinRecordAndKey()
+        return ValidationResult.Success(
+            message = "قفل PIN بازنشانی شد و تمام داده‌های مالی شما دست‌نخورده حفظ گردید."
+        )
     }
 
     /**

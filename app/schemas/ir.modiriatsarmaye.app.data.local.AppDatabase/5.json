@@ -1,0 +1,623 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 5,
+    "identityHash": "68fa8556ef1ac7e9da5e2d0f518fee36",
+    "entities": [
+      {
+        "tableName": "transactions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `datePersian` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `assetClass` TEXT NOT NULL, `assetName` TEXT NOT NULL, `assetSymbol` TEXT NOT NULL, `action` TEXT NOT NULL, `quantity` REAL NOT NULL, `unit` TEXT NOT NULL, `unitPrice` REAL, `currency` TEXT NOT NULL, `fees` REAL NOT NULL, `commissionType` TEXT NOT NULL, `commissionRate` REAL NOT NULL, `totalAmount` REAL, `brokerOrSource` TEXT NOT NULL, `notes` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "datePersian",
+            "columnName": "datePersian",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetClass",
+            "columnName": "assetClass",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetName",
+            "columnName": "assetName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetSymbol",
+            "columnName": "assetSymbol",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quantity",
+            "columnName": "quantity",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unit",
+            "columnName": "unit",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unitPrice",
+            "columnName": "unitPrice",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fees",
+            "columnName": "fees",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commissionType",
+            "columnName": "commissionType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "commissionRate",
+            "columnName": "commissionRate",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalAmount",
+            "columnName": "totalAmount",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "brokerOrSource",
+            "columnName": "brokerOrSource",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_transactions_timestamp",
+            "unique": false,
+            "columnNames": [
+              "timestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transactions_timestamp` ON `${TABLE_NAME}` (`timestamp`)"
+          }
+        ]
+      },
+      {
+        "tableName": "current_prices",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`assetSymbolOrName` TEXT NOT NULL, `assetName` TEXT NOT NULL, `assetClass` TEXT NOT NULL, `price` REAL NOT NULL, `currency` TEXT NOT NULL, `source` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, `unit` TEXT NOT NULL, `priceType` TEXT NOT NULL, `isAutoUpdated` INTEGER NOT NULL, `status` TEXT NOT NULL, `errorMessage` TEXT, `instrumentId` TEXT NOT NULL, PRIMARY KEY(`assetSymbolOrName`))",
+        "fields": [
+          {
+            "fieldPath": "assetSymbolOrName",
+            "columnName": "assetSymbolOrName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetName",
+            "columnName": "assetName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetClass",
+            "columnName": "assetClass",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unit",
+            "columnName": "unit",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "priceType",
+            "columnName": "priceType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isAutoUpdated",
+            "columnName": "isAutoUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "errorMessage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "instrumentId",
+            "columnName": "instrumentId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "assetSymbolOrName"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_current_prices_instrumentId_lastUpdated",
+            "unique": false,
+            "columnNames": [
+              "instrumentId",
+              "lastUpdated"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_current_prices_instrumentId_lastUpdated` ON `${TABLE_NAME}` (`instrumentId`, `lastUpdated`)"
+          }
+        ]
+      },
+      {
+        "tableName": "financial_goals",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `targetAmountToman` REAL NOT NULL, `targetDatePersian` TEXT NOT NULL, `category` TEXT NOT NULL, `notes` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetAmountToman",
+            "columnName": "targetAmountToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetDatePersian",
+            "columnName": "targetDatePersian",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "liabilities",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `totalAmountToman` REAL NOT NULL, `monthlyPaymentToman` REAL NOT NULL, `dueDatePersian` TEXT NOT NULL, `notes` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalAmountToman",
+            "columnName": "totalAmountToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "monthlyPaymentToman",
+            "columnName": "monthlyPaymentToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dueDatePersian",
+            "columnName": "dueDatePersian",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "dividends",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `stockSymbol` TEXT NOT NULL, `stockName` TEXT NOT NULL, `sharesHeld` REAL NOT NULL, `dpsToman` REAL NOT NULL, `receivableAmountToman` REAL NOT NULL, `meetingDatePersian` TEXT NOT NULL, `paymentDatePersian` TEXT NOT NULL, `receivedAmountToman` REAL NOT NULL, `isPaid` INTEGER NOT NULL, `notes` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stockSymbol",
+            "columnName": "stockSymbol",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stockName",
+            "columnName": "stockName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sharesHeld",
+            "columnName": "sharesHeld",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dpsToman",
+            "columnName": "dpsToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivableAmountToman",
+            "columnName": "receivableAmountToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "meetingDatePersian",
+            "columnName": "meetingDatePersian",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentDatePersian",
+            "columnName": "paymentDatePersian",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedAmountToman",
+            "columnName": "receivedAmountToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPaid",
+            "columnName": "isPaid",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "app_settings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `displayCurrency` TEXT NOT NULL, `monthlyInvestmentToman` REAL NOT NULL, `annualInvestmentIncreasePct` REAL NOT NULL, `targetGoldPct` REAL NOT NULL, `targetEquityFundPct` REAL NOT NULL, `targetFixedIncomePct` REAL NOT NULL, `targetUsdPct` REAL NOT NULL, `targetCashPct` REAL NOT NULL, `rebalanceThresholdPct` REAL NOT NULL, `inflationRatePct` REAL NOT NULL, `scenarioConservativeReturnPct` REAL NOT NULL, `scenarioBalancedReturnPct` REAL NOT NULL, `scenarioOptimisticReturnPct` REAL NOT NULL, `retirementHorizonYears` INTEGER NOT NULL, `retirementTargetToman` REAL NOT NULL, `pinCode` TEXT NOT NULL, `isPinEnabled` INTEGER NOT NULL, `isBiometricEnabled` INTEGER NOT NULL, `hideSensitiveAmounts` INTEGER NOT NULL, `notifyMonthlyInvestment` INTEGER NOT NULL, `notifyPriceUpdate` INTEGER NOT NULL, `notifyRebalance` INTEGER NOT NULL, `notifyGoalProgress` INTEGER NOT NULL, `notifyMonthlyReport` INTEGER NOT NULL, `notifyPortfolioDecline` INTEGER NOT NULL, `creatorName` TEXT NOT NULL, `supportEmail` TEXT NOT NULL, `priceUpdateFrequency` TEXT NOT NULL, `lastPriceUpdateTimestamp` INTEGER NOT NULL, `googleAccountEmail` TEXT, `googleAccountName` TEXT, `lastGoogleDriveBackupTimestamp` INTEGER, `lastGoogleDriveBackupSummary` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayCurrency",
+            "columnName": "displayCurrency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "monthlyInvestmentToman",
+            "columnName": "monthlyInvestmentToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "annualInvestmentIncreasePct",
+            "columnName": "annualInvestmentIncreasePct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetGoldPct",
+            "columnName": "targetGoldPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetEquityFundPct",
+            "columnName": "targetEquityFundPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetFixedIncomePct",
+            "columnName": "targetFixedIncomePct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetUsdPct",
+            "columnName": "targetUsdPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetCashPct",
+            "columnName": "targetCashPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rebalanceThresholdPct",
+            "columnName": "rebalanceThresholdPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inflationRatePct",
+            "columnName": "inflationRatePct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scenarioConservativeReturnPct",
+            "columnName": "scenarioConservativeReturnPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scenarioBalancedReturnPct",
+            "columnName": "scenarioBalancedReturnPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scenarioOptimisticReturnPct",
+            "columnName": "scenarioOptimisticReturnPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "retirementHorizonYears",
+            "columnName": "retirementHorizonYears",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "retirementTargetToman",
+            "columnName": "retirementTargetToman",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pinCode",
+            "columnName": "pinCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPinEnabled",
+            "columnName": "isPinEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isBiometricEnabled",
+            "columnName": "isBiometricEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hideSensitiveAmounts",
+            "columnName": "hideSensitiveAmounts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notifyMonthlyInvestment",
+            "columnName": "notifyMonthlyInvestment",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notifyPriceUpdate",
+            "columnName": "notifyPriceUpdate",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notifyRebalance",
+            "columnName": "notifyRebalance",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notifyGoalProgress",
+            "columnName": "notifyGoalProgress",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notifyMonthlyReport",
+            "columnName": "notifyMonthlyReport",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notifyPortfolioDecline",
+            "columnName": "notifyPortfolioDecline",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "creatorName",
+            "columnName": "creatorName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "supportEmail",
+            "columnName": "supportEmail",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "priceUpdateFrequency",
+            "columnName": "priceUpdateFrequency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPriceUpdateTimestamp",
+            "columnName": "lastPriceUpdateTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "googleAccountEmail",
+            "columnName": "googleAccountEmail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "googleAccountName",
+            "columnName": "googleAccountName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastGoogleDriveBackupTimestamp",
+            "columnName": "lastGoogleDriveBackupTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastGoogleDriveBackupSummary",
+            "columnName": "lastGoogleDriveBackupSummary",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '68fa8556ef1ac7e9da5e2d0f518fee36')"
+    ]
+  }
+}

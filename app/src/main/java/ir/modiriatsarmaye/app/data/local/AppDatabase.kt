@@ -8,8 +8,6 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import ir.modiriatsarmaye.app.data.model.*
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -41,6 +39,17 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_transactions_timestamp` ON `transactions` (`timestamp`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_current_prices_instrumentId_lastUpdated` ON `current_prices` (`instrumentId`, `lastUpdated`)"
+        )
+    }
+}
+
 @Database(
     entities = [
         TransactionEntity::class,
@@ -50,8 +59,8 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         DividendEntity::class,
         AppSettingsEntity::class
     ],
-    version = 4,
-    exportSchema = false
+    version = 5,
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun transactionDao(): TransactionDao
@@ -62,19 +71,29 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun settingsDao(): SettingsDao
 
     companion object {
+        const val DATABASE_NAME = "modiriat_sarmaye_db"
+
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5
+        )
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
+
+        fun createCallback(): RoomDatabase.Callback = DatabaseCallback()
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "modiriat_sarmaye_db"
+                    DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-                    .fallbackToDestructiveMigration()
-                    .addCallback(DatabaseCallback())
+                    .addMigrations(*ALL_MIGRATIONS)
+                    .addCallback(createCallback())
                     .build()
                 INSTANCE = instance
                 instance
@@ -88,11 +107,7 @@ abstract class AppDatabase : RoomDatabase() {
         private class DatabaseCallback : RoomDatabase.Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 super.onCreate(db)
-                INSTANCE?.let { database ->
-                    CoroutineScope(Dispatchers.IO).launch {
-                        InitialData.populateDatabase(database)
-                    }
-                }
+                InitialData.seedDefaultSettingsIfMissing(db)
             }
         }
     }

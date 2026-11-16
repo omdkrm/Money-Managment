@@ -6,9 +6,15 @@ import ir.modiriatsarmaye.app.data.market.MarketUpdateReport
 import ir.modiriatsarmaye.app.data.model.*
 import ir.modiriatsarmaye.app.data.repository.ValidationResult
 import ir.modiriatsarmaye.app.data.repository.WealthRepository
+import ir.modiriatsarmaye.app.security.PinMigrationResult
+import ir.modiriatsarmaye.app.security.PinMutationResult
+import ir.modiriatsarmaye.app.security.PinVerificationResult
 import ir.modiriatsarmaye.app.util.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class WealthUiState(
     val transactions: List<TransactionEntity> = emptyList(),
@@ -25,10 +31,24 @@ data class WealthUiState(
     val selectedActionFilter: TransactionAction? = null,
     val searchQuery: String = "",
     val isAppLocked: Boolean = false,
+    val isSecurityReady: Boolean = false,
+    val pinErrorMessage: String? = null,
+    val isKeystorePermanentlyUnavailable: Boolean = false,
+    val pinRecoveryAwaitingConfirmation: Boolean = false,
     val isMarketUpdating: Boolean = false,
     val lastMarketUpdateReport: MarketUpdateReport? = null,
     val userErrorMessage: String? = null,
     val userSuccessMessage: String? = null
+)
+
+private data class SecurityUiStateHolder(
+    val hasUnlockedInSession: Boolean = false,
+    val isSecurityReady: Boolean = false,
+    val isFailClosedSecurityError: Boolean = false,
+    val pinErrorMessage: String? = null,
+    val isKeystorePermanentlyUnavailable: Boolean = false,
+    val isRecoveryDeviceAuthenticated: Boolean = false,
+    val pinRecoveryAwaitingConfirmation: Boolean = false
 )
 
 class WealthViewModel(
@@ -38,11 +58,15 @@ class WealthViewModel(
     private val _selectedAssetClassFilter = MutableStateFlow<AssetClass?>(null)
     private val _selectedActionFilter = MutableStateFlow<TransactionAction?>(null)
     private val _searchQuery = MutableStateFlow("")
-    private val _isAppLocked = MutableStateFlow(false)
+    private val _securityState = MutableStateFlow(SecurityUiStateHolder())
     private val _isMarketUpdating = MutableStateFlow(false)
     private val _lastMarketUpdateReport = MutableStateFlow<MarketUpdateReport?>(null)
     private val _userErrorMessage = MutableStateFlow<String?>(null)
     private val _userSuccessMessage = MutableStateFlow<String?>(null)
+
+    init {
+        refreshSecurityAndMigrateLegacyPin()
+    }
 
     val uiState: StateFlow<WealthUiState> = combine(
         repository.allTransactionsFlow,
@@ -54,7 +78,7 @@ class WealthViewModel(
         _selectedAssetClassFilter,
         _selectedActionFilter,
         _searchQuery,
-        _isAppLocked,
+        _securityState,
         _isMarketUpdating,
         _lastMarketUpdateReport,
         _userErrorMessage,
@@ -74,11 +98,14 @@ class WealthViewModel(
         val filterClass = args[6] as AssetClass?
         val filterAction = args[7] as TransactionAction?
         val query = args[8] as String
-        val isLocked = args[9] as Boolean
+        val secState = args[9] as SecurityUiStateHolder
         val isUpdating = args[10] as Boolean
         val updateReport = args[11] as MarketUpdateReport?
         val errMsg = args[12] as String?
         val succMsg = args[13] as String?
+        val isLocked = !secState.isSecurityReady ||
+            secState.isFailClosedSecurityError ||
+            (settings.isPinEnabled && !secState.hasUnlockedInSession)
 
         // محاسبه وضعیت پرتفوی به صورت خودکار و واکنشی
         val portfolio = CalculationEngine.calculatePortfolio(transactions, prices, settings, liabilities)
@@ -140,6 +167,10 @@ class WealthViewModel(
             selectedActionFilter = filterAction,
             searchQuery = query,
             isAppLocked = isLocked,
+            isSecurityReady = secState.isSecurityReady,
+            pinErrorMessage = secState.pinErrorMessage,
+            isKeystorePermanentlyUnavailable = secState.isKeystorePermanentlyUnavailable,
+            pinRecoveryAwaitingConfirmation = secState.pinRecoveryAwaitingConfirmation,
             isMarketUpdating = isUpdating,
             lastMarketUpdateReport = updateReport,
             userErrorMessage = errMsg,
@@ -147,13 +178,17 @@ class WealthViewModel(
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = WealthUiState()
+        started = SharingStarted.Eagerly,
+        initialValue = WealthUiState(isAppLocked = true, isSecurityReady = false)
     )
 
     fun clearMessages() {
         _userErrorMessage.value = null
         _userSuccessMessage.value = null
+    }
+
+    fun reportUserError(message: String) {
+        _userErrorMessage.value = message
     }
 
     fun setFilterClass(assetClass: AssetClass?) {
@@ -394,13 +429,286 @@ class WealthViewModel(
         }
     }
 
-    fun unlockApp(pin: String): Boolean {
-        val currentSettings = uiState.value.settings
-        return if (!currentSettings.isPinEnabled || currentSettings.pinCode == pin) {
-            _isAppLocked.value = false
-            true
-        } else {
-            false
+    fun refreshSecurityAndMigrateLegacyPin() {
+        viewModelScope.launch {
+            try {
+                val (migrationResult, afterSettings, hasSecurePin, keyHealth) = withContext(Dispatchers.IO) {
+                    val mig = repository.migrateLegacyPinIfNeeded()
+                    val settings = repository.getSettings()
+                    val hasPin = repository.hasSecurePin()
+                    val health = if (settings.isPinEnabled && hasPin) {
+                        repository.checkKeystoreHealth()
+                    } else {
+                        ir.modiriatsarmaye.app.security.KeyHealthStatus.NOT_CREATED
+                    }
+                    listOf(mig, settings, hasPin, health)
+                }
+                val migRes = migrationResult as PinMigrationResult
+                val settingsAfter = afterSettings as AppSettingsEntity
+                val securePinExists = hasSecurePin as Boolean
+                val healthStatus = keyHealth as ir.modiriatsarmaye.app.security.KeyHealthStatus
+
+                when (migRes) {
+                    is PinMigrationResult.FailedPreservedLegacy -> {
+                        _securityState.update {
+                            it.copy(
+                                isSecurityReady = true,
+                                isFailClosedSecurityError = true,
+                                pinErrorMessage = migRes.message,
+                                isKeystorePermanentlyUnavailable = migRes.isPermanentKeystoreFailure
+                            )
+                        }
+                    }
+                    PinMigrationResult.MigratedAndVerified,
+                    PinMigrationResult.NotNeeded -> {
+                        val permanentlyUnavailable = settingsAfter.isPinEnabled && (
+                            !securePinExists ||
+                                healthStatus == ir.modiriatsarmaye.app.security.KeyHealthStatus.PERMANENTLY_UNAVAILABLE ||
+                                healthStatus == ir.modiriatsarmaye.app.security.KeyHealthStatus.NOT_CREATED
+                            )
+                        val temporarilyUnavailable = settingsAfter.isPinEnabled &&
+                            securePinExists &&
+                            healthStatus == ir.modiriatsarmaye.app.security.KeyHealthStatus.TEMPORARILY_UNAVAILABLE
+                        _securityState.update {
+                            it.copy(
+                                isSecurityReady = true,
+                                isFailClosedSecurityError = false,
+                                isKeystorePermanentlyUnavailable = permanentlyUnavailable,
+                                pinErrorMessage = when {
+                                    permanentlyUnavailable ->
+                                        "کلید امنیتی رمز ورود در دستگاه در دسترس نیست. برای دسترسی مجدد می‌توانید از بازیابی با احراز هویت دستگاه استفاده کنید."
+                                    temporarilyUnavailable ->
+                                        "سرویس امنیتی دستگاه موقتاً در دسترس نیست. لطفاً دوباره تلاش کنید."
+                                    else -> null
+                                }
+                            )
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _securityState.update {
+                    it.copy(
+                        isSecurityReady = true,
+                        isFailClosedSecurityError = true,
+                        isKeystorePermanentlyUnavailable = true,
+                        pinErrorMessage = "بررسی وضعیت امنیتی برنامه با خطا مواجه شد. برای محافظت از اطلاعات مالی، دسترسی قفل ماند."
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearPinError() {
+        _securityState.update { it.copy(pinErrorMessage = null) }
+    }
+
+    fun unlockWithPin(pin: String, onResult: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            when (val res = withContext(Dispatchers.IO) { repository.verifyPin(pin) }) {
+                PinVerificationResult.Success -> {
+                    _securityState.update {
+                        it.copy(
+                            hasUnlockedInSession = true,
+                            isFailClosedSecurityError = false,
+                            pinErrorMessage = null,
+                            isKeystorePermanentlyUnavailable = false,
+                            isRecoveryDeviceAuthenticated = false,
+                            pinRecoveryAwaitingConfirmation = false
+                        )
+                    }
+                    onResult?.invoke(true)
+                }
+                PinVerificationResult.InvalidPin -> {
+                    _securityState.update {
+                        it.copy(pinErrorMessage = "رمز ورود اشتباه است.")
+                    }
+                    onResult?.invoke(false)
+                }
+                PinVerificationResult.NoSecurePinConfigured -> {
+                    _securityState.update {
+                        it.copy(
+                            isFailClosedSecurityError = true,
+                            isKeystorePermanentlyUnavailable = true,
+                            pinErrorMessage = "اطلاعات رمز امن در دستگاه یافت نشد. لطفاً از بازیابی با احراز هویت دستگاه استفاده کنید."
+                        )
+                    }
+                    onResult?.invoke(false)
+                }
+                is PinVerificationResult.KeystoreError -> {
+                    _securityState.update {
+                        it.copy(
+                            isKeystorePermanentlyUnavailable = res.isPermanent,
+                            pinErrorMessage = res.message
+                        )
+                    }
+                    onResult?.invoke(false)
+                }
+            }
+        }
+    }
+
+    fun lockAppNow() {
+        if (uiState.value.settings.isPinEnabled || _securityState.value.isFailClosedSecurityError) {
+            _securityState.update {
+                it.copy(
+                    hasUnlockedInSession = false,
+                    pinErrorMessage = null,
+                    isRecoveryDeviceAuthenticated = false,
+                    pinRecoveryAwaitingConfirmation = false
+                )
+            }
+        }
+    }
+
+    fun setOrChangePin(
+        currentPin: String?,
+        newPin: String,
+        onComplete: ((Boolean, String?) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            when (val res = withContext(Dispatchers.IO) { repository.setOrChangePin(currentPin, newPin) }) {
+                PinMutationResult.Success -> {
+                    _securityState.update {
+                        it.copy(
+                            hasUnlockedInSession = true,
+                            isFailClosedSecurityError = false,
+                            pinErrorMessage = null,
+                            isKeystorePermanentlyUnavailable = false
+                        )
+                    }
+                    _userSuccessMessage.value = "رمز ورود (PIN) با موفقیت و به‌صورت رمزنگاری‌شده ذخیره شد."
+                    onComplete?.invoke(true, null)
+                }
+                is PinMutationResult.ValidationError -> {
+                    onComplete?.invoke(false, res.message)
+                }
+                is PinMutationResult.KeystoreError -> {
+                    _securityState.update {
+                        it.copy(isKeystorePermanentlyUnavailable = res.isPermanent)
+                    }
+                    onComplete?.invoke(false, res.message)
+                }
+            }
+        }
+    }
+
+    fun disablePin(
+        currentPin: String,
+        onComplete: ((Boolean, String?) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            when (val res = withContext(Dispatchers.IO) { repository.disablePin(currentPin) }) {
+                PinMutationResult.Success -> {
+                    _securityState.update {
+                        it.copy(
+                            hasUnlockedInSession = true,
+                            isFailClosedSecurityError = false,
+                            pinErrorMessage = null,
+                            isKeystorePermanentlyUnavailable = false,
+                            isRecoveryDeviceAuthenticated = false,
+                            pinRecoveryAwaitingConfirmation = false
+                        )
+                    }
+                    _userSuccessMessage.value = "قفل رمز ورود غیرفعال شد."
+                    onComplete?.invoke(true, null)
+                }
+                is PinMutationResult.ValidationError -> {
+                    onComplete?.invoke(false, res.message)
+                }
+                is PinMutationResult.KeystoreError -> {
+                    _securityState.update {
+                        it.copy(isKeystorePermanentlyUnavailable = res.isPermanent)
+                    }
+                    onComplete?.invoke(false, res.message)
+                }
+            }
+        }
+    }
+
+    fun setBiometricEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            when (val res = repository.setBiometricEnabled(enabled)) {
+                is ValidationResult.Success -> {
+                    _userSuccessMessage.value = if (enabled) {
+                        "ورود با بیومتریک دستگاه فعال شد."
+                    } else {
+                        "ورود با بیومتریک دستگاه غیرفعال شد."
+                    }
+                }
+                is ValidationResult.Error -> {
+                    _userErrorMessage.value = res.message
+                }
+            }
+        }
+    }
+
+    fun onBiometricUnlockSucceeded() {
+        val sec = _securityState.value
+        if (sec.isKeystorePermanentlyUnavailable || sec.isFailClosedSecurityError || !sec.isSecurityReady) {
+            return
+        }
+        _securityState.update {
+            it.copy(
+                hasUnlockedInSession = true,
+                pinErrorMessage = null,
+                isRecoveryDeviceAuthenticated = false,
+                pinRecoveryAwaitingConfirmation = false
+            )
+        }
+    }
+
+    fun onBiometricAuthFailed(message: String) {
+        _securityState.update { it.copy(pinErrorMessage = message) }
+    }
+
+    fun onRecoveryDeviceAuthSucceeded() {
+        _securityState.update {
+            it.copy(
+                isRecoveryDeviceAuthenticated = true,
+                pinRecoveryAwaitingConfirmation = true,
+                pinErrorMessage = null
+            )
+        }
+    }
+
+    fun cancelPinRecovery() {
+        _securityState.update {
+            it.copy(
+                isRecoveryDeviceAuthenticated = false,
+                pinRecoveryAwaitingConfirmation = false
+            )
+        }
+    }
+
+    fun confirmResetPinGateAfterRecovery(onComplete: ((Boolean, String?) -> Unit)? = null) {
+        viewModelScope.launch {
+            val sec = _securityState.value
+            val res = repository.resetPinGateAfterConfirmedRecovery(
+                isDeviceAuthenticated = sec.isRecoveryDeviceAuthenticated,
+                isUserConfirmed = sec.pinRecoveryAwaitingConfirmation
+            )
+            when (res) {
+                is ValidationResult.Success -> {
+                    _securityState.update {
+                        it.copy(
+                            hasUnlockedInSession = true,
+                            isFailClosedSecurityError = false,
+                            pinErrorMessage = null,
+                            isKeystorePermanentlyUnavailable = false,
+                            isRecoveryDeviceAuthenticated = false,
+                            pinRecoveryAwaitingConfirmation = false
+                        )
+                    }
+                    _userSuccessMessage.value = res.message
+                    onComplete?.invoke(true, null)
+                }
+                is ValidationResult.Error -> {
+                    _securityState.update { it.copy(pinErrorMessage = res.message) }
+                    onComplete?.invoke(false, res.message)
+                }
+            }
         }
     }
 }

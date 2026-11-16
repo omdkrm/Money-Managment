@@ -1,6 +1,7 @@
 package ir.modiriatsarmaye.app.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -53,7 +54,12 @@ enum class CommissionType(val titleFa: String) {
  * مدل اصلی و یگانه تراکنش‌های مالی (Canonical Transaction Entity)
  * همه بخش‌ها اطلاعات خود را از این جدول مشتق می‌کنند.
  */
-@Entity(tableName = "transactions")
+@Entity(
+    tableName = "transactions",
+    indices = [
+        Index(value = ["timestamp"], name = "index_transactions_timestamp")
+    ]
+)
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val datePersian: String, // e.g. "1405/01/15" or "فروردین ۱۴۰۵"
@@ -110,7 +116,12 @@ enum class CloudBackupStatus(val titleFa: String) {
  * جدول قیمت‌های روز دارایی‌ها (Current Prices)
  * پشتیبانی از ورود دستی و انتزاع وب‌سرویس‌های آنلاین
  */
-@Entity(tableName = "current_prices")
+@Entity(
+    tableName = "current_prices",
+    indices = [
+        Index(value = ["instrumentId", "lastUpdated"], name = "index_current_prices_instrumentId_lastUpdated")
+    ]
+)
 data class CurrentPriceEntity(
     @PrimaryKey val assetSymbolOrName: String,
     val assetName: String,

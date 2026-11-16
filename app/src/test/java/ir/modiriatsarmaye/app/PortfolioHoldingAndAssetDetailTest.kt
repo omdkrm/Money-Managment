@@ -408,6 +408,11 @@ class PortfolioHoldingAndAssetDetailTest {
                 }
             }
         }
+        composeTestRule.waitUntil(timeoutMillis = 5_000L) {
+            composeTestRule.onAllNodesWithTag("dashboard_screen")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
         composeTestRule.waitForIdle()
 
         // ۱. برنامه بدون صفحه ورود گوگل مستقیماً روی داشبورد باز می‌شود

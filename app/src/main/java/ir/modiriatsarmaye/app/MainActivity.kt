@@ -1,11 +1,11 @@
 package ir.modiriatsarmaye.app
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.automirrored.outlined.*
@@ -26,12 +26,15 @@ import ir.modiriatsarmaye.app.data.model.AssetClass
 import ir.modiriatsarmaye.app.data.model.CurrencyType
 import ir.modiriatsarmaye.app.data.model.TransactionEntity
 import ir.modiriatsarmaye.app.data.repository.WealthRepository
+import ir.modiriatsarmaye.app.security.AndroidBiometricAuthenticator
+import ir.modiriatsarmaye.app.security.BiometricAuthOutcome
+import ir.modiriatsarmaye.app.security.BiometricAuthenticator
+import ir.modiriatsarmaye.app.security.DeviceAuthCapability
 import ir.modiriatsarmaye.app.ui.components.AppButtonDefaults
 import ir.modiriatsarmaye.app.ui.components.AppIcons
 import ir.modiriatsarmaye.app.ui.components.UpdatePriceDialog
 import ir.modiriatsarmaye.app.ui.screens.*
 import ir.modiriatsarmaye.app.ui.theme.ModiriatSarmayeTheme
-import ir.modiriatsarmaye.app.ui.viewmodel.WealthUiState
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthViewModel
 import ir.modiriatsarmaye.app.util.CalculationEngine
 import ir.modiriatsarmaye.app.util.HoldingItem
@@ -56,13 +59,14 @@ enum class AppDestination(
     MORE("بیشتر", AppIcons.MoreHoriz, AppIcons.MoreHorizOutlined, "more")
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         val database = AppDatabase.getInstance(applicationContext)
         val repository = WealthRepository(database, applicationContext)
+        val biometricAuthenticator = AndroidBiometricAuthenticator(this)
 
         setContent {
             ModiriatSarmayeTheme {
@@ -72,7 +76,10 @@ class MainActivity : ComponentActivity() {
                         WealthViewModel(repository)
                     }
 
-                    WealthAppContent(viewModel = viewModel)
+                    WealthAppContent(
+                        viewModel = viewModel,
+                        biometricAuthenticator = biometricAuthenticator
+                    )
                 }
             }
         }
@@ -82,10 +89,66 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WealthAppContent(
-    viewModel: WealthViewModel
+    viewModel: WealthViewModel,
+    biometricAuthenticator: BiometricAuthenticator? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    if (!uiState.isSecurityReady) {
+        SecurityCheckingSplashScreen()
+        return
+    }
+
+    if (uiState.isAppLocked) {
+        val canUseDeviceAuth = remember(biometricAuthenticator) {
+            biometricAuthenticator?.checkDeviceAuthCapability() == DeviceAuthCapability.AVAILABLE
+        }
+        PinLockScreen(
+            uiState = uiState,
+            canUseDeviceAuth = canUseDeviceAuth,
+            onUnlockWithPin = { pin -> viewModel.unlockWithPin(pin) },
+            onTriggerBiometricUnlock = {
+                if (biometricAuthenticator == null) {
+                    viewModel.onBiometricAuthFailed("امکان احراز هویت بیومتریک در این محیط وجود ندارد.")
+                } else {
+                    biometricAuthenticator.authenticate(
+                        title = "ورود به مدیریت سرمایه",
+                        subtitle = "احراز هویت سریع با بیومتریک یا قفل دستگاه",
+                        description = "برای باز کردن قفل برنامه هویت خود را تایید کنید."
+                    ) { outcome ->
+                        when (outcome) {
+                            BiometricAuthOutcome.Succeeded -> viewModel.onBiometricUnlockSucceeded()
+                            BiometricAuthOutcome.Canceled -> Unit
+                            is BiometricAuthOutcome.NotAvailable -> viewModel.onBiometricAuthFailed(outcome.message)
+                            is BiometricAuthOutcome.Error -> viewModel.onBiometricAuthFailed(outcome.message)
+                        }
+                    }
+                }
+            },
+            onTriggerPinRecovery = {
+                if (biometricAuthenticator == null) {
+                    viewModel.onBiometricAuthFailed("امکان احراز هویت دستگاه در این محیط وجود ندارد.")
+                } else {
+                    biometricAuthenticator.authenticate(
+                        title = "بازیابی قفل PIN",
+                        subtitle = "احراز هویت مالک دستگاه",
+                        description = "پس از تایید هویت، می‌توانید با تایید نهایی خود قفل PIN را بدون حذف اطلاعات مالی بازنشانی کنید."
+                    ) { outcome ->
+                        when (outcome) {
+                            BiometricAuthOutcome.Succeeded -> viewModel.onRecoveryDeviceAuthSucceeded()
+                            BiometricAuthOutcome.Canceled -> Unit
+                            is BiometricAuthOutcome.NotAvailable -> viewModel.onBiometricAuthFailed(outcome.message)
+                            is BiometricAuthOutcome.Error -> viewModel.onBiometricAuthFailed(outcome.message)
+                        }
+                    }
+                }
+            },
+            onConfirmPinRecovery = { viewModel.confirmResetPinGateAfterRecovery() },
+            onCancelPinRecovery = { viewModel.cancelPinRecovery() }
+        )
+        return
+    }
 
     var currentDestination by remember { mutableStateOf(AppDestination.HOME) }
     var reportsInitialTab by remember { mutableIntStateOf(0) }
@@ -433,11 +496,24 @@ fun WealthAppContent(
                         onRestoreBackup = { json, replaceExisting ->
                             viewModel.restoreBackupJson(json, replaceExisting = replaceExisting) { _, _ -> }
                         },
-                        onResetDatabase = {
-                            viewModel.resetToInitialData()
-                        },
                         onSyncMarketPrices = {
                             viewModel.syncMarketPrices(forceRefresh = true)
+                        },
+                        onSetOrChangePin = { currentPin, newPin, cb ->
+                            viewModel.setOrChangePin(currentPin, newPin, cb)
+                        },
+                        onDisablePin = { currentPin, cb ->
+                            viewModel.disablePin(currentPin, cb)
+                        },
+                        onToggleBiometric = { enabled ->
+                            if (enabled && biometricAuthenticator?.checkDeviceAuthCapability() != DeviceAuthCapability.AVAILABLE) {
+                                viewModel.reportUserError("ابتدا قفل صفحه یا اثر انگشت را در تنظیمات گوشی خود فعال کنید.")
+                            } else {
+                                viewModel.setBiometricEnabled(enabled)
+                            }
+                        },
+                        onLockAppNow = {
+                            viewModel.lockAppNow()
                         }
                     )
                 }

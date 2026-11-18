@@ -1,0 +1,241 @@
+name: Build APK
+
+# ───────────────────────────────────────────────────────────────
+# راه‌اندازی دستی از تب Actions یا با push به شاخه‌های اصلی
+# ───────────────────────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'نوع ساخت APK'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - 'gradlew'
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# ───────────────────────────────────────────────────────────────
+# متغیرهای سراسری
+# ───────────────────────────────────────────────────────────────
+env:
+  JAVA_VERSION: '21'
+  PACKAGE_NAME: ir.modiriatsarmaye.app
+
+jobs:
+  build-apk:
+    name: Build ${{ github.event.inputs.build_type || 'debug' }} APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+
+      # ──────────────────────────────────────────
+      # ۱. دریافت کد منبع
+      # ──────────────────────────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ──────────────────────────────────────────
+      # ۲. تعیین نوع Build (debug/release)
+      # ──────────────────────────────────────────
+      - name: Set Build Type
+        id: build_type
+        run: |
+          # اگر از workflow_dispatch اجرا شده از input استفاده می‌کنیم
+          # در غیر این‌صورت (push) به‌صورت پیش‌فرض debug می‌سازیم
+          TYPE="${{ github.event.inputs.build_type }}"
+          if [ -z "$TYPE" ]; then
+            TYPE="debug"
+          fi
+          echo "type=$TYPE" >> $GITHUB_OUTPUT
+          echo "Build type: $TYPE"
+
+      # ──────────────────────────────────────────
+      # ۳. بررسی secrets برای Release
+      # ──────────────────────────────────────────
+      - name: Validate Signing Secrets (Release only)
+        if: steps.build_type.outputs.type == 'release'
+        run: |
+          MISSING=0
+
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "::error::Secret مورد نیاز KEYSTORE_BASE64 تنظیم نشده است."
+            MISSING=1
+          fi
+          if [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+            echo "::error::Secret مورد نیاز KEYSTORE_PASSWORD تنظیم نشده است."
+            MISSING=1
+          fi
+          if [ -z "${{ secrets.KEY_ALIAS }}" ]; then
+            echo "::error::Secret مورد نیاز KEY_ALIAS تنظیم نشده است."
+            MISSING=1
+          fi
+          if [ -z "${{ secrets.KEY_PASSWORD }}" ]; then
+            echo "::error::Secret مورد نیاز KEY_PASSWORD تنظیم نشده است."
+            MISSING=1
+          fi
+
+          if [ $MISSING -ne 0 ]; then
+            echo "::error::برای ساخت Release APK باید Secrets امضا را در Settings > Secrets تنظیم کنید."
+            exit 1
+          fi
+
+          echo "✅ تمام Secrets امضا تأیید شدند."
+
+      # ──────────────────────────────────────────
+      # ۴. آماده‌سازی Keystore برای Release
+      # ──────────────────────────────────────────
+      - name: Prepare Keystore (Release only)
+        if: steps.build_type.outputs.type == 'release'
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+
+          if [ ! -s "$RUNNER_TEMP/release.keystore" ]; then
+            echo "::error::فایل keystore خالی یا نامعتبر است."
+            exit 1
+          fi
+
+          chmod 600 "$RUNNER_TEMP/release.keystore"
+          echo "✅ Keystore در RUNNER_TEMP آماده شد."
+
+      # ──────────────────────────────────────────
+      # ۵. اعتبارسنجی Gradle Wrapper
+      # ──────────────────────────────────────────
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      # ──────────────────────────────────────────
+      # ۶. راه‌اندازی Java 21
+      # ──────────────────────────────────────────
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      # ──────────────────────────────────────────
+      # ۷. راه‌اندازی Gradle با Cache
+      # ──────────────────────────────────────────
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_CACHE_KEY }}
+
+      - name: Make gradlew Executable
+        run: chmod +x gradlew
+
+      # ──────────────────────────────────────────
+      # ۸. ساخت Debug APK
+      # ──────────────────────────────────────────
+      - name: Build Debug APK
+        if: steps.build_type.outputs.type == 'debug'
+        run: ./gradlew assembleDebug --stacktrace
+
+      # ──────────────────────────────────────────
+      # ۹. ساخت Release APK
+      # ──────────────────────────────────────────
+      - name: Build Release APK
+        if: steps.build_type.outputs.type == 'release'
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      # ──────────────────────────────────────────
+      # ۱۰. جمع‌آوری فایل خروجی
+      # ──────────────────────────────────────────
+      - name: Collect APK Output
+        id: collect_apk
+        run: |
+          TYPE="${{ steps.build_type.outputs.type }}"
+          mkdir -p apk-output
+
+          if [ "$TYPE" == "debug" ]; then
+            APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+            OUTPUT_NAME="${{ env.PACKAGE_NAME }}-debug.apk"
+          else
+            APK_PATH="app/build/outputs/apk/release/app-release.apk"
+            OUTPUT_NAME="${{ env.PACKAGE_NAME }}-release.apk"
+          fi
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::فایل APK در مسیر مورد انتظار یافت نشد: $APK_PATH"
+            exit 1
+          fi
+
+          cp "$APK_PATH" "apk-output/$OUTPUT_NAME"
+
+          # اندازه فایل
+          SIZE=$(du -sh "apk-output/$OUTPUT_NAME" | cut -f1)
+          echo "output_name=$OUTPUT_NAME" >> $GITHUB_OUTPUT
+          echo "apk_size=$SIZE"           >> $GITHUB_OUTPUT
+
+          echo "✅ APK آماده است: apk-output/$OUTPUT_NAME ($SIZE)"
+
+      # ──────────────────────────────────────────
+      # ۱۱. آپلود APK به عنوان Artifact
+      # ──────────────────────────────────────────
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.collect_apk.outputs.output_name }}
+          path: apk-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      # ──────────────────────────────────────────
+      # ۱۲. پاکسازی Keystore (همیشه اجرا می‌شود)
+      # ──────────────────────────────────────────
+      - name: Cleanup Keystore
+        if: always() && steps.build_type.outputs.type == 'release'
+        run: |
+          if [ -f "$RUNNER_TEMP/release.keystore" ]; then
+            shred -u "$RUNNER_TEMP/release.keystore" 2>/dev/null || rm -f "$RUNNER_TEMP/release.keystore"
+            echo "✅ Keystore به‌صورت امن حذف شد."
+          fi
+
+      # ──────────────────────────────────────────
+      # ۱۳. خلاصه نتیجه در GitHub Summary
+      # ──────────────────────────────────────────
+      - name: Build Summary
+        if: always()
+        run: |
+          TYPE="${{ steps.build_type.outputs.type }}"
+          APK_NAME="${{ steps.collect_apk.outputs.output_name }}"
+          APK_SIZE="${{ steps.collect_apk.outputs.apk_size }}"
+
+          echo "## 📦 نتیجه ساخت APK"           >> $GITHUB_STEP_SUMMARY
+          echo ""                                 >> $GITHUB_STEP_SUMMARY
+          echo "| پارامتر | مقدار |"              >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|"                         >> $GITHUB_STEP_SUMMARY
+          echo "| پکیج | \`${{ env.PACKAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| نوع Build | \`$TYPE\` |"        >> $GITHUB_STEP_SUMMARY
+          echo "| نام فایل | \`$APK_NAME\` |"     >> $GITHUB_STEP_SUMMARY
+          echo "| اندازه | $APK_SIZE |"            >> $GITHUB_STEP_SUMMARY
+          echo "| Java | ${{ env.JAVA_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| شاخه | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo ""                                 >> $GITHUB_STEP_SUMMARY
+          echo "> فایل APK در تب **Artifacts** همین workflow قابل دانلود است." >> $GITHUB_STEP_SUMMARY

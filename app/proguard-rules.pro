@@ -31,3 +31,13 @@
 -dontwarn org.openjsse.javax.net.ssl.SSLSocket
 -dontwarn org.openjsse.net.ssl.OpenJSSE
 
+# Keep Room entities, DAOs, database classes, and Kotlin model enums for release minification
+-keep class ir.modiriatsarmaye.app.data.model.** { *; }
+-keepclassmembers enum ir.modiriatsarmaye.app.data.model.** {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-dontwarn androidx.room.**
+

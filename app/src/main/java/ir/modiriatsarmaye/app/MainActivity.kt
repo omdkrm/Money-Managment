@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -150,8 +151,10 @@ fun WealthAppContent(
         return
     }
 
-    var currentDestination by remember { mutableStateOf(AppDestination.HOME) }
-    var reportsInitialTab by remember { mutableIntStateOf(0) }
+    var currentDestinationRoute by rememberSaveable { mutableStateOf(AppDestination.HOME.route) }
+    val currentDestination = AppDestination.entries.firstOrNull { it.route == currentDestinationRoute } ?: AppDestination.HOME
+    val setCurrentDestination: (AppDestination) -> Unit = { currentDestinationRoute = it.route }
+    var reportsInitialTab by rememberSaveable { mutableIntStateOf(0) }
     var selectedAssetKey by remember { mutableStateOf<SelectedAssetKey?>(null) }
 
     // مدیریت وضعیت شیت‌ها و دیالوگ‌ها
@@ -284,7 +287,7 @@ fun WealthAppContent(
                             selected = isSelected,
                             onClick = {
                                 selectedAssetKey = null
-                                currentDestination = destination
+                                setCurrentDestination(destination)
                             },
                             icon = {
                                 Icon(
@@ -318,11 +321,11 @@ fun WealthAppContent(
                             editingTransaction = null
                             showAddTransactionSheet = true
                         },
-                        onNavigateToPortfolio = { currentDestination = AppDestination.PORTFOLIO },
-                        onNavigateToTransactions = { currentDestination = AppDestination.TRANSACTIONS },
+                        onNavigateToPortfolio = { setCurrentDestination(AppDestination.PORTFOLIO) },
+                        onNavigateToTransactions = { setCurrentDestination(AppDestination.TRANSACTIONS) },
                         onNavigateToReports = { tabIndex ->
                             reportsInitialTab = tabIndex
-                            currentDestination = AppDestination.REPORTS
+                            setCurrentDestination(AppDestination.REPORTS)
                         },
                         onTransactionClick = { tx ->
                             editingTransaction = tx
@@ -495,6 +498,9 @@ fun WealthAppContent(
                         },
                         onRestoreBackup = { json, replaceExisting ->
                             viewModel.restoreBackupJson(json, replaceExisting = replaceExisting) { _, _ -> }
+                        },
+                        onRestoreBackupWithResult = { json, replaceExisting, onComplete ->
+                            viewModel.restoreBackupJson(json, replaceExisting = replaceExisting, onComplete = onComplete)
                         },
                         onSyncMarketPrices = {
                             viewModel.syncMarketPrices(forceRefresh = true)

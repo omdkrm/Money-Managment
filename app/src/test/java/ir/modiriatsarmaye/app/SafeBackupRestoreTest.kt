@@ -471,4 +471,224 @@ class SafeBackupRestoreTest {
         assertEquals(1, report.validTransactions.size)
         assertEquals(1, report.validPrices.size)
     }
+
+    @Test
+    fun testEmptyDatabaseExportAndValidateRoundTrip() = runBlocking {
+        val exportedJson = SafeBackupManager.exportBackupJson(
+            transactions = emptyList(),
+            prices = emptyList(),
+            goals = emptyList(),
+            liabilities = emptyList(),
+            dividends = emptyList()
+        )
+        val report = SafeBackupManager.validateAndParseBackup(exportedJson)
+        assertTrue(report.isValid)
+        assertTrue(report.isEmptyBackup)
+        assertEquals(0, report.validTransactions.size)
+        assertEquals(0, report.validPrices.size)
+    }
+
+    @Test
+    fun testExportSanitizesNonFiniteDoublesWithoutCrashing() {
+        val badTx = TransactionEntity(
+            id = 1,
+            datePersian = "1403/05/01",
+            timestamp = 1720000000000,
+            assetClass = AssetClass.GOLD,
+            assetName = "طلا",
+            action = TransactionAction.BUY,
+            quantity = Double.NaN,
+            unit = "گرم",
+            unitPrice = Double.POSITIVE_INFINITY,
+            fees = Double.NEGATIVE_INFINITY,
+            commissionRate = Double.NaN,
+            totalAmount = Double.NaN
+        )
+        val badGoal = GoalEntity(
+            title = "هدف",
+            targetAmountToman = Double.POSITIVE_INFINITY
+        )
+        val exportedJson = SafeBackupManager.exportBackupJson(
+            transactions = listOf(badTx),
+            prices = emptyList(),
+            goals = listOf(badGoal),
+            liabilities = emptyList()
+        )
+        val root = JSONObject(exportedJson)
+        assertEquals(2, root.getInt("schemaVersion"))
+        assertTrue(root.has("transactions"))
+    }
+
+    @Test
+    fun testUnsupportedFutureOrNegativeSchemaVersionIsRejected() {
+        val futureJson = """
+            {
+                "schemaVersion": 99,
+                "transactions": []
+            }
+        """.trimIndent()
+        val futureReport = SafeBackupManager.validateAndParseBackup(futureJson)
+        assertFalse(futureReport.isValid)
+        assertTrue(futureReport.errors.first().contains("پشتیبانی نمی‌شود"))
+
+        val invalidVersionJson = """
+            {
+                "schemaVersion": 0,
+                "transactions": []
+            }
+        """.trimIndent()
+        val invalidReport = SafeBackupManager.validateAndParseBackup(invalidVersionJson)
+        assertFalse(invalidReport.isValid)
+    }
+
+    @Test
+    fun testLegacyBackupOmittingGoalsAndDividendsPreservesExistingRecordsOnReplace() = runBlocking {
+        database.goalDao().insertGoal(GoalEntity(title = "هدف خرید خانه", targetAmountToman = 5_000_000_000.0))
+        database.dividendDao().insertDividend(
+            DividendEntity(
+                stockSymbol = "فولاد",
+                stockName = "فولاد مبارکه",
+                sharesHeld = 1000.0,
+                dpsToman = 500.0,
+                receivableAmountToman = 500_000.0
+            )
+        )
+        database.settingsDao().saveSettings(
+            AppSettingsEntity(isPinEnabled = true, pinCode = "", isBiometricEnabled = true, creatorName = "کاربر")
+        )
+
+        // Legacy v1 backup without goals, liabilities, or dividends keys
+        val v1Json = """
+            {
+                "version": 1,
+                "transactions": [
+                    {
+                        "datePersian": "1403/01/10",
+                        "assetClass": "GOLD",
+                        "assetName": "سکه امامی",
+                        "action": "BUY",
+                        "quantity": 1.0,
+                        "unit": "عدد",
+                        "unitPrice": "40000000"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val report = SafeBackupManager.validateAndParseBackup(v1Json)
+        assertTrue(report.isValid)
+        assertFalse(report.hasGoalsSection)
+        assertFalse(report.hasDividendsSection)
+
+        val res = SafeBackupManager.executeSafeRestore(database, report, replaceExisting = true)
+        assertTrue(res is ValidationResult.Success)
+
+        // Omitted sections in v1 backup must be preserved, NOT wiped
+        assertEquals(1, database.goalDao().getAllGoals().size)
+        assertEquals("هدف خرید خانه", database.goalDao().getAllGoals()[0].title)
+        assertEquals(1, database.dividendDao().getAllDividends().size)
+        assertEquals("فولاد", database.dividendDao().getAllDividends()[0].stockSymbol)
+
+        // Device PIN & security settings must remain untouched
+        val settingsAfter = database.settingsDao().getSettingsDirect()!!
+        assertTrue(settingsAfter.isPinEnabled)
+        assertTrue(settingsAfter.isBiometricEnabled)
+        assertEquals("کاربر", settingsAfter.creatorName)
+    }
+
+    @Test
+    fun testMergeDeduplicatesGoalsLiabilitiesDividendsAndTransactions() = runBlocking {
+        val sharedTx = TransactionEntity(
+            datePersian = "1403/03/01",
+            timestamp = 1717000000000L,
+            assetClass = AssetClass.STOCK,
+            assetName = "فملی",
+            assetSymbol = "فملی",
+            action = TransactionAction.BUY,
+            quantity = 100.0,
+            unit = "سهم",
+            unitPrice = 6000.0,
+            totalAmount = 600000.0
+        )
+        database.transactionDao().insertTransaction(sharedTx)
+        database.goalDao().insertGoal(GoalEntity(title = "صندوق اضطراری", targetAmountToman = 100_000_000.0, targetDatePersian = "1404/01/01"))
+        database.liabilityDao().insertLiability(LiabilityEntity(title = "وام مسکن", totalAmountToman = 200_000_000.0, dueDatePersian = "1405/01/01"))
+        database.dividendDao().insertDividend(
+            DividendEntity(
+                stockSymbol = "فملی",
+                stockName = "ملی مس",
+                sharesHeld = 100.0,
+                dpsToman = 800.0,
+                receivableAmountToman = 80_000.0,
+                meetingDatePersian = "1403/04/15"
+            )
+        )
+
+        val exportedJson = SafeBackupManager.exportBackupJson(
+            transactions = database.transactionDao().getAllTransactions(),
+            prices = emptyList(),
+            goals = database.goalDao().getAllGoals(),
+            liabilities = database.liabilityDao().getAllLiabilities(),
+            dividends = database.dividendDao().getAllDividends()
+        )
+
+        val report = SafeBackupManager.validateAndParseBackup(exportedJson)
+        assertTrue(report.isValid)
+        val mergeRes = SafeBackupManager.executeSafeRestore(database, report, replaceExisting = false)
+        assertTrue(mergeRes is ValidationResult.Success)
+
+        // Merging identical backup must NOT duplicate any record
+        assertEquals(1, database.transactionDao().getAllTransactions().size)
+        assertEquals(1, database.goalDao().getAllGoals().size)
+        assertEquals(1, database.liabilityDao().getAllLiabilities().size)
+        assertEquals(1, database.dividendDao().getAllDividends().size)
+    }
+
+    @Test
+    fun testDatabaseFailureDuringRestoreReturnsErrorWithoutCrashing() = runBlocking {
+        database.transactionDao().insertTransaction(
+            TransactionEntity(
+                datePersian = "1402/12/01",
+                timestamp = 1700000000000L,
+                assetClass = AssetClass.GOLD,
+                assetName = "طلای موجود",
+                assetSymbol = "GOLD",
+                action = TransactionAction.BUY,
+                quantity = 2.5,
+                unit = "گرم",
+                unitPrice = 3000000.0,
+                totalAmount = 7500000.0
+            )
+        )
+
+        val report = SafeBackupManager.validateAndParseBackup(
+            """
+            {
+                "schemaVersion": 2,
+                "transactions": [
+                    {
+                        "datePersian": "1403/01/01",
+                        "assetClass": "GOLD",
+                        "assetName": "طلای جدید",
+                        "quantity": 1.0
+                    }
+                ]
+            }
+            """.trimIndent()
+        )
+        assertTrue(report.isValid)
+
+        // Trigger a genuine SQLite failure mid-transaction (in-memory Room reopens transparently after close())
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_tx_delete BEFORE DELETE ON transactions BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;"
+        )
+        val res = SafeBackupManager.executeSafeRestore(database, report, replaceExisting = true)
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS fail_tx_delete")
+
+        assertTrue(res is ValidationResult.Error)
+        val existingAfterFailure = database.transactionDao().getAllTransactions()
+        assertEquals(1, existingAfterFailure.size)
+        assertEquals("طلای موجود", existingAfterFailure[0].assetName)
+    }
 }
+

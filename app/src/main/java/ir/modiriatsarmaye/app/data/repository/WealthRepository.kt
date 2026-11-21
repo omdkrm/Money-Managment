@@ -403,12 +403,15 @@ class WealthRepository(
      * پشتیبان‌گیری استاندارد (Export Backup) به صورت JSON با طرح‌واره مستند
      */
     suspend fun exportBackupJson(): String {
-        return ir.modiriatsarmaye.app.data.backup.SafeBackupManager.exportBackupJson(
-            transactions = transactionDao.getAllTransactions(),
-            prices = currentPriceDao.getAllPrices(),
-            goals = goalDao.getAllGoals(),
-            liabilities = liabilityDao.getAllLiabilities()
-        )
+        return withContext(Dispatchers.IO) {
+            ir.modiriatsarmaye.app.data.backup.SafeBackupManager.exportBackupJson(
+                transactions = transactionDao.getAllTransactions(),
+                prices = currentPriceDao.getAllPrices(),
+                goals = goalDao.getAllGoals(),
+                liabilities = liabilityDao.getAllLiabilities(),
+                dividends = dividendDao.getAllDividends()
+            )
+        }
     }
 
     /**
@@ -422,16 +425,18 @@ class WealthRepository(
      * بازیابی فایل پشتیبان (Restore Backup) با صحت‌سنجی یکپارچگی، سازگاری عقب‌رو و تراکنش امن Room
      */
     suspend fun restoreBackupJson(jsonString: String, replaceExisting: Boolean = true): ValidationResult {
-        val report = ir.modiriatsarmaye.app.data.backup.SafeBackupManager.validateAndParseBackup(jsonString)
-        if (!report.isValid) {
-            val err = report.errors.firstOrNull() ?: "فایل پشتیبان نامعتبر است."
-            return ValidationResult.Error(err)
+        return withContext(Dispatchers.IO) {
+            val report = ir.modiriatsarmaye.app.data.backup.SafeBackupManager.validateAndParseBackup(jsonString)
+            if (!report.isValid) {
+                val err = report.errors.firstOrNull() ?: "فایل پشتیبان نامعتبر است."
+                return@withContext ValidationResult.Error(err)
+            }
+            ir.modiriatsarmaye.app.data.backup.SafeBackupManager.executeSafeRestore(
+                database = database,
+                report = report,
+                replaceExisting = replaceExisting
+            )
         }
-        return ir.modiriatsarmaye.app.data.backup.SafeBackupManager.executeSafeRestore(
-            database = database,
-            report = report,
-            replaceExisting = replaceExisting
-        )
     }
 
     /**

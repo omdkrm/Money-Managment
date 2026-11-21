@@ -1,5 +1,9 @@
 package ir.modiriatsarmaye.app.ui.screens
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -29,13 +33,64 @@ import ir.modiriatsarmaye.app.ui.components.*
 import ir.modiriatsarmaye.app.ui.theme.*
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthUiState
 import ir.modiriatsarmaye.app.util.PersianUtils
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val BACKUP_UI_TAG = "MoreScreenBackup"
+private const val MAX_BACKUP_FILE_BYTES = 15 * 1024 * 1024 // ۱۵ مگابایت سقف ایمن خواندن فایل پشتیبان
+
+private fun readBackupUriUtf8Bounded(context: Context, uri: Uri): String {
+    val resolver = context.contentResolver
+    try {
+        resolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+            if (afd.length > MAX_BACKUP_FILE_BYTES) {
+                throw IOException("حجم فایل انتخاب‌شده بسیار زیاد است (حداکثر ۱۵ مگابایت پشتیبانی می‌شود).")
+            }
+        }
+    } catch (e: IOException) {
+        throw e
+    } catch (_: Exception) {
+        // برخی ارائه‌دهنده‌های SAF طول فایل را گزارش نمی‌دهند؛ خواندن محدود در ادامه کنترل می‌شود
+    }
+
+    return resolver.openInputStream(uri)?.use { inputStream ->
+        val buffer = ByteArray(8192)
+        val out = ByteArrayOutputStream()
+        var total = 0
+        while (true) {
+            val read = inputStream.read(buffer)
+            if (read == -1) break
+            total += read
+            if (total > MAX_BACKUP_FILE_BYTES) {
+                throw IOException("حجم فایل انتخاب‌شده بیش از حد مجاز (۱۵ مگابایت) است.")
+            }
+            out.write(buffer, 0, read)
+        }
+        out.toString(Charsets.UTF_8.name())
+    } ?: throw IOException("امکان خواندن فایل انتخاب شده وجود ندارد.")
+}
+
+private fun writeBackupUriUtf8(context: Context, uri: Uri, jsonContent: String) {
+    val resolver = context.contentResolver
+    val stream = try {
+        resolver.openOutputStream(uri, "wt")
+    } catch (_: Exception) {
+        null
+    } ?: resolver.openOutputStream(uri)
+        ?: throw IOException("عدم دسترسی به مسیر فایل انتخابی جهت ذخیره‌سازی")
+
+    stream.use { os ->
+        os.write(jsonContent.toByteArray(Charsets.UTF_8))
+        os.flush()
+    }
+}
 
 @Composable
 fun MoreScreen(
@@ -48,7 +103,8 @@ fun MoreScreen(
     onSetOrChangePin: (currentPin: String?, newPin: String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, _, cb -> cb(false, null) },
     onDisablePin: (currentPin: String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, cb -> cb(false, null) },
     onToggleBiometric: (Boolean) -> Unit = {},
-    onLockAppNow: () -> Unit = {}
+    onLockAppNow: () -> Unit = {},
+    onRestoreBackupWithResult: ((String, Boolean, (Boolean, String?) -> Unit) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val settings = uiState.settings
@@ -56,69 +112,214 @@ fun MoreScreen(
 
     var showSettingsEditorDialog by remember { mutableStateOf(false) }
 
-    // بازخورد عملیات پشتیبان‌گیری فایلی
+    // بازخورد و وضعیت اجرای عملیات پشتیبان‌گیری فایلی
     var fileOpSuccessMessage by remember { mutableStateOf<String?>(null) }
     var fileOpErrorMessage by remember { mutableStateOf<String?>(null) }
+    var isBackupInProgress by remember { mutableStateOf(false) }
+    var isRestoreInProgress by remember { mutableStateOf(false) }
 
     // وضعیت بازیابی فایل محلی SAF
     var pendingFileRestoreJson by remember { mutableStateOf<String?>(null) }
     var pendingFileRestoreReport by remember { mutableStateOf<BackupValidationReport?>(null) }
     var showFileRestoreConfirmDialog by remember { mutableStateOf(false) }
 
-    // ثبت لانچر ذخیره فایل در Storage Access Framework با نوع MIME application/json
+    fun handleCreateDocumentResult(uri: Uri?) {
+        if (uri == null) {
+            Log.i(BACKUP_UI_TAG, "Backup export picker canceled by user")
+            isBackupInProgress = false
+            return
+        }
+        isBackupInProgress = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val jsonContent = onExportBackup()
+                    writeBackupUriUtf8(context, uri, jsonContent)
+                }
+                Log.i(BACKUP_UI_TAG, "Backup export completed successfully")
+                fileOpSuccessMessage = "پشتیبان با موفقیت در فایل ذخیره شد."
+                fileOpErrorMessage = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                Log.e(BACKUP_UI_TAG, "OutOfMemoryError during backup export", e)
+                fileOpErrorMessage = "حافظه کافی برای ذخیره فایل پشتیبان در دسترس نبود."
+                fileOpSuccessMessage = null
+            } catch (e: SecurityException) {
+                Log.e(BACKUP_UI_TAG, "SecurityException during backup export", e)
+                fileOpErrorMessage = "مجوز دسترسی به مسیر ذخیره‌سازی فایل داده نشد."
+                fileOpSuccessMessage = null
+            } catch (e: Throwable) {
+                Log.e(BACKUP_UI_TAG, "Backup export failed: ${e.javaClass.simpleName}", e)
+                fileOpErrorMessage = "ذخیره فایل پشتیبان انجام نشد: ${e.localizedMessage ?: "خطای دسترسی به فایل"}"
+                fileOpSuccessMessage = null
+            } finally {
+                isBackupInProgress = false
+            }
+        }
+    }
+
+    fun handleOpenDocumentResult(uri: Uri?) {
+        if (uri == null) {
+            Log.i(BACKUP_UI_TAG, "Backup restore picker canceled by user")
+            isRestoreInProgress = false
+            return
+        }
+        isRestoreInProgress = true
+        scope.launch {
+            try {
+                val (jsonContent, report) = withContext(Dispatchers.IO) {
+                    val content = readBackupUriUtf8Bounded(context, uri)
+                    val validation = SafeBackupManager.validateAndParseBackup(content)
+                    Pair(content, validation)
+                }
+                if (!report.isValid) {
+                    Log.w(BACKUP_UI_TAG, "Selected backup failed validation")
+                    fileOpErrorMessage = report.errors.firstOrNull() ?: "فایل پشتیبان نامعتبر است."
+                    fileOpSuccessMessage = null
+                } else {
+                    Log.i(BACKUP_UI_TAG, "Backup file parsed and validated cleanly; opening confirmation dialog")
+                    pendingFileRestoreJson = jsonContent
+                    pendingFileRestoreReport = report
+                    fileOpErrorMessage = null
+                    showFileRestoreConfirmDialog = true
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                Log.e(BACKUP_UI_TAG, "OutOfMemoryError while reading backup file", e)
+                fileOpErrorMessage = "حجم فایل انتخاب‌شده بیش از توان حافظه دستگاه است."
+                fileOpSuccessMessage = null
+            } catch (e: SecurityException) {
+                Log.e(BACKUP_UI_TAG, "SecurityException while opening backup file", e)
+                fileOpErrorMessage = "اجازه دسترسی به فایل انتخاب‌شده صادر نشد."
+                fileOpSuccessMessage = null
+            } catch (e: Throwable) {
+                Log.e(BACKUP_UI_TAG, "Backup read failed: ${e.javaClass.simpleName}", e)
+                fileOpErrorMessage = "خواندن فایل پشتیبان انجام نشد: ${e.localizedMessage ?: "خطای خواندن فایل"}"
+                fileOpSuccessMessage = null
+            } finally {
+                isRestoreInProgress = false
+            }
+        }
+    }
+
+    // ثبت لانچر ذخیره فایل در Storage Access Framework با Fallback ایمن برای دستگاه‌های خاص
     val createDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val jsonContent = onExportBackup()
-                    context.contentResolver.openOutputStream(uri)?.use { os ->
-                        os.write(jsonContent.toByteArray(Charsets.UTF_8))
-                    } ?: throw IOException("عدم دسترسی به مسیر فایل انتخابی جهت ذخیره‌سازی")
-                    withContext(Dispatchers.Main) {
-                        fileOpSuccessMessage = "پشتیبان با موفقیت در فایل ذخیره شد."
-                        fileOpErrorMessage = null
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        fileOpErrorMessage = "ذخیره فایل پشتیبان انجام نشد: ${e.localizedMessage ?: "خطای ناشناخته"}"
-                        fileOpSuccessMessage = null
-                    }
-                }
-            }
-        }
+        handleCreateDocumentResult(uri)
+    }
+
+    val createDocumentFallbackLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("*/*")
+    ) { uri ->
+        handleCreateDocumentResult(uri)
     }
 
     // ثبت لانچر انتخاب و بازخوانی فایل پشتیبان JSON از حافظه دستگاه
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val jsonContent = context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        inputStream.bufferedReader(Charsets.UTF_8).readText()
-                    } ?: throw IOException("امکان خواندن فایل انتخاب شده وجود ندارد.")
+        handleOpenDocumentResult(uri)
+    }
 
-                    val report = SafeBackupManager.validateAndParseBackup(jsonContent)
-                    withContext(Dispatchers.Main) {
-                        if (!report.isValid) {
-                            fileOpErrorMessage = report.errors.firstOrNull() ?: "فایل پشتیبان نامعتبر است."
-                            fileOpSuccessMessage = null
-                        } else {
-                            pendingFileRestoreJson = jsonContent
-                            pendingFileRestoreReport = report
-                            showFileRestoreConfirmDialog = true
-                        }
+    fun launchBackupExportPicker() {
+        if (isBackupInProgress || isRestoreInProgress) return
+        val timeFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US)
+        val filename = "modiriat_sarmaye_backup_${timeFormat.format(Date())}.json"
+        fileOpSuccessMessage = null
+        fileOpErrorMessage = null
+        isBackupInProgress = true
+        try {
+            createDocumentLauncher.launch(filename)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(BACKUP_UI_TAG, "Primary CreateDocument picker unavailable; trying wildcard fallback", e)
+            try {
+                createDocumentFallbackLauncher.launch(filename)
+            } catch (fallbackEx: ActivityNotFoundException) {
+                Log.e(BACKUP_UI_TAG, "No SAF CreateDocument handler available on device", fallbackEx)
+                isBackupInProgress = false
+                fileOpErrorMessage = "برنامه مدیریت فایل دستگاه برای ذخیره پشتیبان در دسترس نیست."
+            } catch (fallbackErr: Throwable) {
+                Log.e(BACKUP_UI_TAG, "Fallback CreateDocument launch failed", fallbackErr)
+                isBackupInProgress = false
+                fileOpErrorMessage = "باز کردن صفحه ذخیره‌سازی فایل با خطا مواجه شد."
+            }
+        } catch (e: SecurityException) {
+            Log.e(BACKUP_UI_TAG, "SecurityException launching backup picker", e)
+            isBackupInProgress = false
+            fileOpErrorMessage = "دسترسی سیستم به انتخابگر فایل محدود شده است."
+        } catch (e: Throwable) {
+            Log.e(BACKUP_UI_TAG, "Unexpected error launching backup picker: ${e.javaClass.simpleName}", e)
+            isBackupInProgress = false
+            fileOpErrorMessage = "امکان باز کردن صفحه ذخیره فایل پشتیبان وجود ندارد."
+        }
+    }
+
+    fun launchBackupRestorePicker() {
+        if (isBackupInProgress || isRestoreInProgress) return
+        fileOpSuccessMessage = null
+        fileOpErrorMessage = null
+        isRestoreInProgress = true
+        try {
+            openDocumentLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
+        } catch (e: ActivityNotFoundException) {
+            Log.w(BACKUP_UI_TAG, "Typed OpenDocument picker unavailable; trying */* fallback", e)
+            try {
+                openDocumentLauncher.launch(arrayOf("*/*"))
+            } catch (fallbackEx: ActivityNotFoundException) {
+                Log.e(BACKUP_UI_TAG, "No SAF OpenDocument handler available on device", fallbackEx)
+                isRestoreInProgress = false
+                fileOpErrorMessage = "برنامه مدیریت فایل دستگاه برای انتخاب نسخه پشتیبان در دسترس نیست."
+            } catch (fallbackErr: Throwable) {
+                Log.e(BACKUP_UI_TAG, "Fallback OpenDocument launch failed", fallbackErr)
+                isRestoreInProgress = false
+                fileOpErrorMessage = "باز کردن انتخابگر فایل پشتیبان با خطا مواجه شد."
+            }
+        } catch (e: SecurityException) {
+            Log.e(BACKUP_UI_TAG, "SecurityException launching restore picker", e)
+            isRestoreInProgress = false
+            fileOpErrorMessage = "دسترسی سیستم به انتخابگر فایل محدود شده است."
+        } catch (e: Throwable) {
+            Log.e(BACKUP_UI_TAG, "Unexpected error launching restore picker: ${e.javaClass.simpleName}", e)
+            isRestoreInProgress = false
+            fileOpErrorMessage = "امکان باز کردن انتخابگر فایل پشتیبان وجود ندارد."
+        }
+    }
+
+    fun applyValidatedRestore(json: String, replaceExisting: Boolean) {
+        if (isRestoreInProgress) return
+        if (onRestoreBackupWithResult != null) {
+            isRestoreInProgress = true
+            onRestoreBackupWithResult(json, replaceExisting) { success, errMsg ->
+                isRestoreInProgress = false
+                showFileRestoreConfirmDialog = false
+                pendingFileRestoreJson = null
+                pendingFileRestoreReport = null
+                if (success) {
+                    fileOpSuccessMessage = if (replaceExisting) {
+                        "داده‌ها با موفقیت جایگزین شدند."
+                    } else {
+                        "پشتیبان با موفقیت با داده‌های موجود ادغام گردید."
                     }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        fileOpErrorMessage = "خواندن فایل پشتیبان انجام نشد: ${e.localizedMessage ?: "خطای ناشناخته"}"
-                        fileOpSuccessMessage = null
-                    }
+                    fileOpErrorMessage = null
+                } else {
+                    fileOpErrorMessage = errMsg ?: "بازیابی نسخه پشتیبان با خطا مواجه شد؛ داده‌های فعلی دست‌نخورده باقی ماندند."
+                    fileOpSuccessMessage = null
                 }
             }
+        } else {
+            onRestoreBackup(json, replaceExisting)
+            showFileRestoreConfirmDialog = false
+            pendingFileRestoreJson = null
+            pendingFileRestoreReport = null
+            fileOpSuccessMessage = if (replaceExisting) {
+                "داده‌ها با موفقیت جایگزین شدند."
+            } else {
+                "پشتیبان با موفقیت با داده‌های موجود ادغام گردید."
+            }
+            fileOpErrorMessage = null
         }
     }
 
@@ -126,14 +327,18 @@ fun MoreScreen(
     if (showFileRestoreConfirmDialog && pendingFileRestoreJson != null && pendingFileRestoreReport != null) {
         val rep = pendingFileRestoreReport!!
         AlertDialog(
-            onDismissRequest = { showFileRestoreConfirmDialog = false },
+            onDismissRequest = {
+                if (!isRestoreInProgress) {
+                    showFileRestoreConfirmDialog = false
+                }
+            },
             title = {
                 Text("تأیید بازیابی از فایل پشتیبان", fontWeight = FontWeight.Bold)
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "مشخصات نسخه پشتیبان خوانده‌شده از فایل JSON:",
+                        text = "مشخصات نسخه پشتیبان خوانده‌شده از فایل JSON (نسخه ${PersianUtils.toPersianDigits(rep.schemaVersion.toString())}):",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -148,14 +353,32 @@ fun MoreScreen(
                             Text("• تعداد قیمت‌های روز: ${PersianUtils.formatNumber(rep.validPrices.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
                             Text("• اهداف مالی: ${PersianUtils.formatNumber(rep.validGoals.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
                             Text("• بدهی‌ها و تعهدات: ${PersianUtils.formatNumber(rep.validLiabilities.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
+                            if (rep.hasDividendsSection || rep.validDividends.isNotEmpty()) {
+                                Text("• سود نقدی مجامع: ${PersianUtils.formatNumber(rep.validDividends.size.toDouble())} مورد", style = MaterialTheme.typography.bodySmall)
+                            }
                             if (rep.skippedTransactionsCount > 0) {
                                 Text("• رکوردهای نامعتبر نادیده گرفته‌شده: ${PersianUtils.toPersianDigits(rep.skippedTransactionsCount.toString())}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
+                    if (rep.isEmptyBackup) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "هشدار: این فایل پشتیبان خالی است. در صورت انتخاب «جایگزینی کامل»، تمام سوابق مالی فعلی پاک می‌شوند.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "نحوه اعمال نسخه پشتیبان بر روی داده‌های فعلی را انتخاب نمایید:",
+                        text = "نحوه اعمال نسخه پشتیبان بر روی داده‌های فعلی را انتخاب نمایید (تنظیمات رمز PIN دستگاه دست‌نخورده می‌ماند):",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -171,11 +394,12 @@ fun MoreScreen(
                             AppOutlinedButton(
                                 text = "ادغام با داده‌های موجود",
                                 onClick = {
-                                    val json = pendingFileRestoreJson!!
-                                    onRestoreBackup(json, false) // Merge
-                                    showFileRestoreConfirmDialog = false
-                                    fileOpSuccessMessage = "پشتیبان با موفقیت با داده‌های موجود ادغام گردید."
+                                    pendingFileRestoreJson?.let { json ->
+                                        applyValidatedRestore(json, replaceExisting = false)
+                                    }
                                 },
+                                isLoading = isRestoreInProgress,
+                                enabled = !isRestoreInProgress,
                                 contentPadding = AppButtonDefaults.CompactContentPadding,
                                 modifier = itemModifier.testTag("confirm_restore_merge_btn")
                             )
@@ -184,11 +408,11 @@ fun MoreScreen(
                             AppDestructiveButton(
                                 text = "جایگزینی کامل",
                                 onClick = {
-                                    val json = pendingFileRestoreJson!!
-                                    onRestoreBackup(json, true) // Replace
-                                    showFileRestoreConfirmDialog = false
-                                    fileOpSuccessMessage = "داده‌ها با موفقیت جایگزین شدند."
+                                    pendingFileRestoreJson?.let { json ->
+                                        applyValidatedRestore(json, replaceExisting = true)
+                                    }
                                 },
+                                enabled = !isRestoreInProgress,
                                 contentPadding = AppButtonDefaults.CompactContentPadding,
                                 modifier = itemModifier.testTag("confirm_restore_replace_btn")
                             )
@@ -196,6 +420,7 @@ fun MoreScreen(
                     )
                     AppTextButton(
                         text = "انصراف",
+                        enabled = !isRestoreInProgress,
                         onClick = { showFileRestoreConfirmDialog = false },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -411,7 +636,9 @@ fun MoreScreen(
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = ProfitGreen.copy(alpha = 0.15f),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("backup_op_success_banner")
                         ) {
                             Text(
                                 text = fileOpSuccessMessage!!,
@@ -427,7 +654,9 @@ fun MoreScreen(
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.errorContainer,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("backup_op_error_banner")
                         ) {
                             Text(
                                 text = fileOpErrorMessage!!,
@@ -444,22 +673,20 @@ fun MoreScreen(
                         firstButton = { itemModifier ->
                             AppPrimaryButton(
                                 text = "گرفتن نسخه پشتیبان",
-                                onClick = {
-                                    val timeFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US)
-                                    val filename = "modiriat_sarmaye_backup_${timeFormat.format(Date())}.json"
-                                    createDocumentLauncher.launch(filename)
-                                },
+                                onClick = { launchBackupExportPicker() },
                                 icon = AppIcons.FileDownload,
+                                isLoading = isBackupInProgress,
+                                enabled = !isBackupInProgress && !isRestoreInProgress,
                                 modifier = itemModifier.testTag("export_file_backup_btn")
                             )
                         },
                         secondButton = { itemModifier ->
                             AppOutlinedButton(
                                 text = "بازگردانی نسخه پشتیبان",
-                                onClick = {
-                                    openDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-                                },
+                                onClick = { launchBackupRestorePicker() },
                                 icon = AppIcons.FileUpload,
+                                isLoading = isRestoreInProgress,
+                                enabled = !isBackupInProgress && !isRestoreInProgress,
                                 modifier = itemModifier.testTag("restore_file_backup_btn")
                             )
                         }

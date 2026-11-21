@@ -322,15 +322,23 @@ class WealthViewModel(
         onComplete: (Boolean, String?) -> Unit
     ) {
         viewModelScope.launch {
-            when (val res = repository.restoreBackupJson(jsonString, replaceExisting = replaceExisting)) {
-                is ValidationResult.Success -> {
-                    _userSuccessMessage.value = res.message
-                    onComplete(true, null)
+            try {
+                when (val res = repository.restoreBackupJson(jsonString, replaceExisting = replaceExisting)) {
+                    is ValidationResult.Success -> {
+                        _userSuccessMessage.value = res.message
+                        onComplete(true, null)
+                    }
+                    is ValidationResult.Error -> {
+                        _userErrorMessage.value = res.message
+                        onComplete(false, res.message)
+                    }
                 }
-                is ValidationResult.Error -> {
-                    _userErrorMessage.value = res.message
-                    onComplete(false, res.message)
-                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val msg = "خطا در بازیابی نسخه پشتیبان: ${e.localizedMessage ?: "خطای غیرمنتظره"}"
+                _userErrorMessage.value = msg
+                onComplete(false, msg)
             }
         }
     }

@@ -1,11 +1,10 @@
 package ir.modiriatsarmaye.app.ui.screens
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +28,13 @@ import androidx.compose.ui.unit.sp
 import ir.modiriatsarmaye.app.data.backup.BackupValidationReport
 import ir.modiriatsarmaye.app.data.backup.SafeBackupManager
 import ir.modiriatsarmaye.app.data.model.*
+import ir.modiriatsarmaye.app.ui.backup.BackupPickerLaunchOutcome
+import ir.modiriatsarmaye.app.ui.backup.BackupPickerUriEvent
+import ir.modiriatsarmaye.app.ui.backup.CreateBackupDocumentContract
+import ir.modiriatsarmaye.app.ui.backup.GetBackupContentContract
+import ir.modiriatsarmaye.app.ui.backup.OpenBackupDocumentContract
+import ir.modiriatsarmaye.app.ui.backup.launchBackupExportWithFallbacks
+import ir.modiriatsarmaye.app.ui.backup.launchBackupRestoreWithFallbacks
 import ir.modiriatsarmaye.app.ui.components.*
 import ir.modiriatsarmaye.app.ui.theme.*
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthUiState
@@ -104,7 +110,13 @@ fun MoreScreen(
     onDisablePin: (currentPin: String, onComplete: (Boolean, String?) -> Unit) -> Unit = { _, cb -> cb(false, null) },
     onToggleBiometric: (Boolean) -> Unit = {},
     onLockAppNow: () -> Unit = {},
-    onRestoreBackupWithResult: ((String, Boolean, (Boolean, String?) -> Unit) -> Unit)? = null
+    onRestoreBackupWithResult: ((String, Boolean, (Boolean, String?) -> Unit) -> Unit)? = null,
+    externalExportPickerEvent: BackupPickerUriEvent? = null,
+    onConsumeExternalExportPickerEvent: (Long) -> Unit = {},
+    externalRestorePickerEvent: BackupPickerUriEvent? = null,
+    onConsumeExternalRestorePickerEvent: (Long) -> Unit = {},
+    onLaunchExternalBackupExportPicker: ((suggestedFileName: String) -> BackupPickerLaunchOutcome)? = null,
+    onLaunchExternalBackupRestorePicker: (() -> BackupPickerLaunchOutcome)? = null
 ) {
     val context = LocalContext.current
     val settings = uiState.settings
@@ -204,25 +216,52 @@ fun MoreScreen(
         }
     }
 
-    // ثبت لانچر ذخیره فایل در Storage Access Framework با Fallback ایمن برای دستگاه‌های خاص
-    val createDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        handleCreateDocumentResult(uri)
+    LaunchedEffect(externalExportPickerEvent) {
+        val event = externalExportPickerEvent ?: return@LaunchedEffect
+        onConsumeExternalExportPickerEvent(event.eventId)
+        handleCreateDocumentResult(event.uri)
     }
 
-    val createDocumentFallbackLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("*/*")
-    ) { uri ->
-        handleCreateDocumentResult(uri)
+    LaunchedEffect(externalRestorePickerEvent) {
+        val event = externalRestorePickerEvent ?: return@LaunchedEffect
+        onConsumeExternalRestorePickerEvent(event.eventId)
+        handleOpenDocumentResult(event.uri)
     }
 
-    // ثبت لانچر انتخاب و بازخوانی فایل پشتیبان JSON از حافظه دستگاه
-    val openDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        handleOpenDocumentResult(uri)
-    }
+    // ثبت ایمن لانچرهای محلی تنها در زمانی که میزبان Activity لانچرهای مستقل را ارسال نکرده باشد
+    // استفاده از remember روی قراردادها از Unregister/Re-register شدن هنگام Recomposition جلوگیری می‌کند
+    val hasRegistryOwner = LocalActivityResultRegistryOwner.current != null
+    val shouldRegisterLocalLaunchers =
+        onLaunchExternalBackupExportPicker == null && onLaunchExternalBackupRestorePicker == null && hasRegistryOwner
+
+    val createJsonContract = remember { CreateBackupDocumentContract("application/json", includeOpenableCategory = true) }
+    val createWildcardContract = remember { CreateBackupDocumentContract("*/*", includeOpenableCategory = false) }
+    val openDocumentContract = remember { OpenBackupDocumentContract(includeOpenableCategory = true) }
+    val getContentContract = remember { GetBackupContentContract(includeOpenableCategory = true) }
+
+    val localCreateDocumentLauncher = if (shouldRegisterLocalLaunchers) {
+        rememberLauncherForActivityResult(contract = createJsonContract) { uri ->
+            handleCreateDocumentResult(uri)
+        }
+    } else null
+
+    val localCreateDocumentFallbackLauncher = if (shouldRegisterLocalLaunchers) {
+        rememberLauncherForActivityResult(contract = createWildcardContract) { uri ->
+            handleCreateDocumentResult(uri)
+        }
+    } else null
+
+    val localOpenDocumentLauncher = if (shouldRegisterLocalLaunchers) {
+        rememberLauncherForActivityResult(contract = openDocumentContract) { uri ->
+            handleOpenDocumentResult(uri)
+        }
+    } else null
+
+    val localGetContentFallbackLauncher = if (shouldRegisterLocalLaunchers) {
+        rememberLauncherForActivityResult(contract = getContentContract) { uri ->
+            handleOpenDocumentResult(uri)
+        }
+    } else null
 
     fun launchBackupExportPicker() {
         if (isBackupInProgress || isRestoreInProgress) return
@@ -231,29 +270,27 @@ fun MoreScreen(
         fileOpSuccessMessage = null
         fileOpErrorMessage = null
         isBackupInProgress = true
-        try {
-            createDocumentLauncher.launch(filename)
-        } catch (e: ActivityNotFoundException) {
-            Log.w(BACKUP_UI_TAG, "Primary CreateDocument picker unavailable; trying wildcard fallback", e)
-            try {
-                createDocumentFallbackLauncher.launch(filename)
-            } catch (fallbackEx: ActivityNotFoundException) {
-                Log.e(BACKUP_UI_TAG, "No SAF CreateDocument handler available on device", fallbackEx)
-                isBackupInProgress = false
-                fileOpErrorMessage = "برنامه مدیریت فایل دستگاه برای ذخیره پشتیبان در دسترس نیست."
-            } catch (fallbackErr: Throwable) {
-                Log.e(BACKUP_UI_TAG, "Fallback CreateDocument launch failed", fallbackErr)
-                isBackupInProgress = false
-                fileOpErrorMessage = "باز کردن صفحه ذخیره‌سازی فایل با خطا مواجه شد."
+
+        val outcome = when {
+            onLaunchExternalBackupExportPicker != null -> {
+                onLaunchExternalBackupExportPicker(filename)
             }
-        } catch (e: SecurityException) {
-            Log.e(BACKUP_UI_TAG, "SecurityException launching backup picker", e)
+            localCreateDocumentLauncher != null && localCreateDocumentFallbackLauncher != null -> {
+                launchBackupExportWithFallbacks(
+                    suggestedFileName = filename,
+                    primaryLauncher = localCreateDocumentLauncher,
+                    fallbackLauncher = localCreateDocumentFallbackLauncher
+                )
+            }
+            else -> {
+                Log.e(BACKUP_UI_TAG, "No ActivityResultRegistryOwner or host export launcher available")
+                BackupPickerLaunchOutcome.Failed("امکان باز کردن صفحه ذخیره فایل پشتیبان وجود ندارد.")
+            }
+        }
+
+        if (outcome is BackupPickerLaunchOutcome.Failed) {
             isBackupInProgress = false
-            fileOpErrorMessage = "دسترسی سیستم به انتخابگر فایل محدود شده است."
-        } catch (e: Throwable) {
-            Log.e(BACKUP_UI_TAG, "Unexpected error launching backup picker: ${e.javaClass.simpleName}", e)
-            isBackupInProgress = false
-            fileOpErrorMessage = "امکان باز کردن صفحه ذخیره فایل پشتیبان وجود ندارد."
+            fileOpErrorMessage = outcome.userMessage
         }
     }
 
@@ -262,29 +299,26 @@ fun MoreScreen(
         fileOpSuccessMessage = null
         fileOpErrorMessage = null
         isRestoreInProgress = true
-        try {
-            openDocumentLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
-        } catch (e: ActivityNotFoundException) {
-            Log.w(BACKUP_UI_TAG, "Typed OpenDocument picker unavailable; trying */* fallback", e)
-            try {
-                openDocumentLauncher.launch(arrayOf("*/*"))
-            } catch (fallbackEx: ActivityNotFoundException) {
-                Log.e(BACKUP_UI_TAG, "No SAF OpenDocument handler available on device", fallbackEx)
-                isRestoreInProgress = false
-                fileOpErrorMessage = "برنامه مدیریت فایل دستگاه برای انتخاب نسخه پشتیبان در دسترس نیست."
-            } catch (fallbackErr: Throwable) {
-                Log.e(BACKUP_UI_TAG, "Fallback OpenDocument launch failed", fallbackErr)
-                isRestoreInProgress = false
-                fileOpErrorMessage = "باز کردن انتخابگر فایل پشتیبان با خطا مواجه شد."
+
+        val outcome = when {
+            onLaunchExternalBackupRestorePicker != null -> {
+                onLaunchExternalBackupRestorePicker()
             }
-        } catch (e: SecurityException) {
-            Log.e(BACKUP_UI_TAG, "SecurityException launching restore picker", e)
+            localOpenDocumentLauncher != null && localGetContentFallbackLauncher != null -> {
+                launchBackupRestoreWithFallbacks(
+                    openDocumentLauncher = localOpenDocumentLauncher,
+                    getContentLauncher = localGetContentFallbackLauncher
+                )
+            }
+            else -> {
+                Log.e(BACKUP_UI_TAG, "No ActivityResultRegistryOwner or host restore launcher available")
+                BackupPickerLaunchOutcome.Failed("امکان باز کردن انتخابگر فایل پشتیبان وجود ندارد.")
+            }
+        }
+
+        if (outcome is BackupPickerLaunchOutcome.Failed) {
             isRestoreInProgress = false
-            fileOpErrorMessage = "دسترسی سیستم به انتخابگر فایل محدود شده است."
-        } catch (e: Throwable) {
-            Log.e(BACKUP_UI_TAG, "Unexpected error launching restore picker: ${e.javaClass.simpleName}", e)
-            isRestoreInProgress = false
-            fileOpErrorMessage = "امکان باز کردن انتخابگر فایل پشتیبان وجود ندارد."
+            fileOpErrorMessage = outcome.userMessage
         }
     }
 

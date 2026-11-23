@@ -31,6 +31,13 @@ import ir.modiriatsarmaye.app.security.AndroidBiometricAuthenticator
 import ir.modiriatsarmaye.app.security.BiometricAuthOutcome
 import ir.modiriatsarmaye.app.security.BiometricAuthenticator
 import ir.modiriatsarmaye.app.security.DeviceAuthCapability
+import ir.modiriatsarmaye.app.ui.backup.BackupPickerLaunchOutcome
+import ir.modiriatsarmaye.app.ui.backup.BackupPickerUriEvent
+import ir.modiriatsarmaye.app.ui.backup.CreateBackupDocumentContract
+import ir.modiriatsarmaye.app.ui.backup.GetBackupContentContract
+import ir.modiriatsarmaye.app.ui.backup.OpenBackupDocumentContract
+import ir.modiriatsarmaye.app.ui.backup.launchBackupExportWithFallbacks
+import ir.modiriatsarmaye.app.ui.backup.launchBackupRestoreWithFallbacks
 import ir.modiriatsarmaye.app.ui.components.AppButtonDefaults
 import ir.modiriatsarmaye.app.ui.components.AppIcons
 import ir.modiriatsarmaye.app.ui.components.UpdatePriceDialog
@@ -39,6 +46,9 @@ import ir.modiriatsarmaye.app.ui.theme.ModiriatSarmayeTheme
 import ir.modiriatsarmaye.app.ui.viewmodel.WealthViewModel
 import ir.modiriatsarmaye.app.util.CalculationEngine
 import ir.modiriatsarmaye.app.util.HoldingItem
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 data class SelectedAssetKey(
     val assetName: String,
@@ -61,6 +71,64 @@ enum class AppDestination(
 }
 
 class MainActivity : FragmentActivity() {
+
+    private val backupEventCounter = AtomicLong(1L)
+    private val _externalExportPickerEvent = MutableStateFlow<BackupPickerUriEvent?>(null)
+    private val externalExportPickerEvent = _externalExportPickerEvent.asStateFlow()
+
+    private val _externalRestorePickerEvent = MutableStateFlow<BackupPickerUriEvent?>(null)
+    private val externalRestorePickerEvent = _externalRestorePickerEvent.asStateFlow()
+
+    // ثبت لانچرهای SAF در سطح Activity پیش از چرخه STARTED تا از خطاهای Recomposition و از دست رفتن نتیجه جلوگیری شود
+    private val backupCreateJsonLauncher = registerForActivityResult(
+        CreateBackupDocumentContract("application/json", includeOpenableCategory = true)
+    ) { uri ->
+        _externalExportPickerEvent.value = BackupPickerUriEvent(backupEventCounter.getAndIncrement(), uri)
+    }
+
+    private val backupCreateWildcardLauncher = registerForActivityResult(
+        CreateBackupDocumentContract("*/*", includeOpenableCategory = false)
+    ) { uri ->
+        _externalExportPickerEvent.value = BackupPickerUriEvent(backupEventCounter.getAndIncrement(), uri)
+    }
+
+    private val backupOpenDocumentLauncher = registerForActivityResult(
+        OpenBackupDocumentContract(includeOpenableCategory = true)
+    ) { uri ->
+        _externalRestorePickerEvent.value = BackupPickerUriEvent(backupEventCounter.getAndIncrement(), uri)
+    }
+
+    private val backupGetContentLauncher = registerForActivityResult(
+        GetBackupContentContract(includeOpenableCategory = true)
+    ) { uri ->
+        _externalRestorePickerEvent.value = BackupPickerUriEvent(backupEventCounter.getAndIncrement(), uri)
+    }
+
+    private fun launchSafExportPicker(suggestedFileName: String): BackupPickerLaunchOutcome =
+        launchBackupExportWithFallbacks(
+            suggestedFileName = suggestedFileName,
+            primaryLauncher = backupCreateJsonLauncher,
+            fallbackLauncher = backupCreateWildcardLauncher
+        )
+
+    private fun launchSafRestorePicker(): BackupPickerLaunchOutcome =
+        launchBackupRestoreWithFallbacks(
+            openDocumentLauncher = backupOpenDocumentLauncher,
+            getContentLauncher = backupGetContentLauncher
+        )
+
+    private fun consumeExportPickerEvent(eventId: Long) {
+        if (_externalExportPickerEvent.value?.eventId == eventId) {
+            _externalExportPickerEvent.value = null
+        }
+    }
+
+    private fun consumeRestorePickerEvent(eventId: Long) {
+        if (_externalRestorePickerEvent.value?.eventId == eventId) {
+            _externalRestorePickerEvent.value = null
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -76,10 +144,18 @@ class MainActivity : FragmentActivity() {
                     val viewModel: WealthViewModel = viewModel {
                         WealthViewModel(repository)
                     }
+                    val exportPickerEvent by externalExportPickerEvent.collectAsStateWithLifecycle()
+                    val restorePickerEvent by externalRestorePickerEvent.collectAsStateWithLifecycle()
 
                     WealthAppContent(
                         viewModel = viewModel,
-                        biometricAuthenticator = biometricAuthenticator
+                        biometricAuthenticator = biometricAuthenticator,
+                        externalExportPickerEvent = exportPickerEvent,
+                        onConsumeExternalExportPickerEvent = ::consumeExportPickerEvent,
+                        externalRestorePickerEvent = restorePickerEvent,
+                        onConsumeExternalRestorePickerEvent = ::consumeRestorePickerEvent,
+                        onLaunchExternalBackupExportPicker = ::launchSafExportPicker,
+                        onLaunchExternalBackupRestorePicker = ::launchSafRestorePicker
                     )
                 }
             }
@@ -91,7 +167,13 @@ class MainActivity : FragmentActivity() {
 @Composable
 fun WealthAppContent(
     viewModel: WealthViewModel,
-    biometricAuthenticator: BiometricAuthenticator? = null
+    biometricAuthenticator: BiometricAuthenticator? = null,
+    externalExportPickerEvent: BackupPickerUriEvent? = null,
+    onConsumeExternalExportPickerEvent: (Long) -> Unit = {},
+    externalRestorePickerEvent: BackupPickerUriEvent? = null,
+    onConsumeExternalRestorePickerEvent: (Long) -> Unit = {},
+    onLaunchExternalBackupExportPicker: ((suggestedFileName: String) -> BackupPickerLaunchOutcome)? = null,
+    onLaunchExternalBackupRestorePicker: (() -> BackupPickerLaunchOutcome)? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -520,7 +602,13 @@ fun WealthAppContent(
                         },
                         onLockAppNow = {
                             viewModel.lockAppNow()
-                        }
+                        },
+                        externalExportPickerEvent = externalExportPickerEvent,
+                        onConsumeExternalExportPickerEvent = onConsumeExternalExportPickerEvent,
+                        externalRestorePickerEvent = externalRestorePickerEvent,
+                        onConsumeExternalRestorePickerEvent = onConsumeExternalRestorePickerEvent,
+                        onLaunchExternalBackupExportPicker = onLaunchExternalBackupExportPicker,
+                        onLaunchExternalBackupRestorePicker = onLaunchExternalBackupRestorePicker
                     )
                 }
             }
